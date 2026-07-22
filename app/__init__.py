@@ -1,0 +1,1 @@
+"""Video Code Duplicate Finder."""
