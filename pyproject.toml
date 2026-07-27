@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "video-code-duplicate-finder"
-version = "0.0.1"
+version = "0.0.2"
 description = "Windows GUI for finding duplicate video codes and safely removing folders"
 readme = "README.md"
 license = "MIT"
@@ -20,7 +20,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "pyinstaller>=6.0"]
 
 [tool.setuptools.packages.find]
 include = ["app*"]
