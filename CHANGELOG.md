@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.2 - Test Release
+
+- Add a reproducible PyInstaller `onedir` build script.
+- Publish the Windows executable as a separate release artifact.
+- Keep FFmpeg and ffprobe external and configurable from Settings.
+
 ## 0.0.1 - Test Release
 
 Initial Windows 11 test release of Video Code Duplicate Finder.

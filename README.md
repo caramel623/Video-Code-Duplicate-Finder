@@ -24,6 +24,19 @@ pip install -r requirements.txt
 python main.py
 ```
 
+## 建立 Windows EXE
+
+使用 PyInstaller 建立 `onedir` 發布包；FFmpeg／ffprobe 不會被內嵌，仍由設定頁指定：
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
+.\build.ps1
+```
+
+輸出位於 `dist/VideoCodeDuplicateFinder/`，壓縮檔為
+`dist/VideoCodeDuplicateFinder-v0.0.2-windows-x64.zip`。
+
 ## 刪除安全性
 
 - 只能刪除掃描根目錄之下的影片直接父資料夾；掃描根目錄、磁碟根目錄、使用者家目錄與 Windows 目錄一律拒絕。
