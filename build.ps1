@@ -7,7 +7,7 @@ $DistRoot = Join-Path $ProjectRoot "dist"
 $BuildRoot = Join-Path $ProjectRoot "build"
 $AppName = "VideoCodeDuplicateFinder"
 $AppDir = Join-Path $DistRoot $AppName
-$ZipPath = Join-Path $DistRoot "$AppName-v0.0.2-windows-x64.zip"
+$ZipPath = Join-Path $DistRoot "$AppName-v0.0.3-windows-x64.zip"
 
 if (-not (Test-Path -LiteralPath $Python)) {
     throw "Missing .venv. Create a virtual environment and install requirements.txt first."

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "video-code-duplicate-finder"
-version = "0.0.2"
+version = "0.0.3"
 description = "Windows GUI for finding duplicate video codes and safely removing folders"
 readme = "README.md"
 license = "MIT"

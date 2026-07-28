@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.3 - Test Release
+
+- Treat `ABC-123-CD1` and `ABC-123-CD2` as parts of the same base video code.
+- Preserve the CD part number in scan results and display it in the GUI.
+- Add parser and scanner coverage for multi-part video names.
+
 ## 0.0.2 - Test Release
 
 - Add a reproducible PyInstaller `onedir` build script.

@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Callable
 
-from .code_parser import extract_codes
+from .code_parser import extract_codes, extract_part
 from .models import VideoItem
 
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".ts", ".m2ts", ".mpg", ".mpeg", ".m4v"}
@@ -35,7 +35,15 @@ def scan_videos(root: Path, should_cancel: Callable[[], bool] | None = None) -> 
             except OSError:
                 continue
             codes = extract_codes(path.stem)
-            items.append(VideoItem(path, codes[0] if codes else None, stat.st_size, modified_ns=stat.st_mtime_ns))
+            items.append(
+                VideoItem(
+                    path,
+                    codes[0] if codes else None,
+                    stat.st_size,
+                    modified_ns=stat.st_mtime_ns,
+                    part=extract_part(path.stem),
+                )
+            )
     return items
 
 
