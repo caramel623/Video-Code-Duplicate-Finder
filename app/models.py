@@ -14,6 +14,7 @@ class VideoItem:
     height: int = 0
     bitrate: int = 0
     modified_ns: int = 0
+    part: int | None = None
 
     @property
     def parent(self) -> Path:

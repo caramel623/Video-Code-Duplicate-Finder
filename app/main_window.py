@@ -578,8 +578,11 @@ class MainWindow(QMainWindow):
 
             info = self.folder_previews.get(item.parent)
             status = self.status_by_folder.get(item.parent, "建議保留" if item.path in keep_paths else "")
+            code_label = item.code or "未辨識"
+            if item.part is not None:
+                code_label += f" · CD{item.part}"
             values = [
-                item.code or "未辨識",
+                code_label,
                 item.path.name,
                 str(item.parent),
                 str(len(info.videos)) if info else "—",

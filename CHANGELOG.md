@@ -1,0 +1,23 @@
+# Changelog
+
+## 0.0.3 - Test Release
+
+- Treat `ABC-123-CD1` and `ABC-123-CD2` as parts of the same base video code.
+- Preserve the CD part number in scan results and display it in the GUI.
+- Add parser and scanner coverage for multi-part video names.
+
+## 0.0.2 - Test Release
+
+- Add a reproducible PyInstaller `onedir` build script.
+- Publish the Windows executable as a separate release artifact.
+- Keep FFmpeg and ffprobe external and configurable from Settings.
+
+## 0.0.1 - Test Release
+
+Initial Windows 11 test release of Video Code Duplicate Finder.
+
+- Video code scanning and duplicate-group results.
+- Detailed video browser and asynchronous thumbnail preview mode.
+- Optional safe folder deletion with recycle-bin default and two-step confirmation.
+- FFmpeg/ffprobe path selection in Settings; FFmpeg remains a separate third-party dependency.
+- MIT-licensed application source with pytest coverage for safety-critical deletion behavior.

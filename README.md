@@ -5,6 +5,7 @@ Windows 11 的 Python／PySide6 影音番號重複整理工具。掃描資料夾
 ## 目前功能
 
 - 背景掃描與停止控制，掃描期間自動停用刪除操作。
+- 支援 `ABC-123-CD1`、`ABC-123-CD2` 等分集命名；分集會歸入同一個 `ABC-123` 番號群組，不會被當成不同番號。
 - 「重複番號結果」與「影片瀏覽結果」分頁，顯示資料夾影片數、檔案數與總大小。
 - 影片瀏覽結果可快速切換詳細表格與縮圖預覽；縮圖以 FFmpeg 非同步產生並快取，雙擊會交給 Windows 預設播放器播放。
 - FFmpeg 與主程式分開發布；可在設定頁指定同時包含 `ffmpeg.exe`、`ffprobe.exe` 的資料夾，未指定時才自動偵測。
@@ -23,6 +24,19 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 python main.py
 ```
+
+## 建立 Windows EXE
+
+使用 PyInstaller 建立 `onedir` 發布包；FFmpeg／ffprobe 不會被內嵌，仍由設定頁指定：
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
+.\build.ps1
+```
+
+輸出位於 `dist/VideoCodeDuplicateFinder/`，壓縮檔為
+`dist/VideoCodeDuplicateFinder-v0.0.3-windows-x64.zip`。
 
 ## 刪除安全性
 
