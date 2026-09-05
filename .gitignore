@@ -11,6 +11,7 @@ venv/
 .vscode/
 
 # App state / generated
+temp/
 settings.json
 .thumbnails/
 *.sqlite

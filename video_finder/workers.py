@@ -11,7 +11,7 @@ from .scanner import VideoFile
 
 
 def _cache_dir():
-    path = os.path.join(app_data_dir(), ".thumbnails")
+    path = os.path.join(app_data_dir(), "temp")
     os.makedirs(path, exist_ok=True)
     return path
 
@@ -21,6 +21,24 @@ def thumb_cache_path(vf: VideoFile, seconds, width):
     basis = f"{vf.path}|{int(vf.mtime)}|{vf.size}|{seconds}|{width}"
     digest = hashlib.sha1(basis.encode("utf-8", "ignore")).hexdigest()
     return os.path.join(_cache_dir(), digest + ".jpg")
+
+
+def temp_dir():
+    """Thumbnail temp folder (cleared on app exit)."""
+    return os.path.join(app_data_dir(), "temp")
+
+
+def clear_temp():
+    """Remove all thumbnails from the temp folder."""
+    import shutil
+
+    path = temp_dir()
+    try:
+        if os.path.isdir(path):
+            shutil.rmtree(path)
+    except Exception:
+        pass
+
 
 
 class ScanWorker(QThread):
