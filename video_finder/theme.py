@@ -73,6 +73,16 @@ QMenu::item { padding: 7px 22px 7px 14px; border-radius: 6px; color: #e6e9ee; }
 QMenu::item:selected { background: #34507d; color: #ffffff; }
 QMenu::separator { height: 1px; background: #3d4450; margin: 5px 8px; }
 
+QTabWidget::pane { border: 1px solid #343a44; border-radius: 10px; top: -1px; background: #23272e; }
+QTabBar { background: transparent; }
+QTabBar::tab {
+    background: #262a31; color: #b7bdc7; padding: 8px 20px;
+    border: 1px solid #343a44; border-bottom: none;
+    border-top-left-radius: 8px; border-top-right-radius: 8px; margin-right: 2px;
+}
+QTabBar::tab:selected { background: #23272e; color: #ffffff; font-weight: 700; }
+QTabBar::tab:hover:!selected { background: #2c313a; }
+
 QSplitter::handle { background: transparent; }
 
 QStatusBar { background: #23272e; border-top: 1px solid #343a44; color: #9aa2ad; }

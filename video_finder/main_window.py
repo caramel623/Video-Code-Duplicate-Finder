@@ -19,19 +19,22 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSplitter,
+    QTabWidget,
+    QTableWidget,
     QTreeWidget,
     QTreeWidgetItem,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 from . import __version__
 from .config import Config
-from .ffmpeg_backend import ffmpeg_version, find_ffmpeg
+from .ffmpeg_backend import ffmpeg_version, find_ffmpeg, find_ffprobe
 from .scanner import VideoFile, VideoGroup, group_files
 from .settings_dialog import SettingsDialog
 from .util import human_size, open_folder, open_with_default, short_path
-from .workers import ScanWorker, ThumbWorker, thumb_cache_path
+from .workers import CodecScanWorker, ScanWorker, ThumbWorker, thumb_cache_path
 
 CARD_W = 168
 CARD_H = 94
@@ -128,6 +131,10 @@ class MainWindow(QMainWindow):
         self.visible_groups: list[VideoGroup] = []
         self.scan_worker = None
         self.thumb_worker = None
+        self.codec_worker = None
+        self.codec_results: list[dict] = []
+        self.codec_visible: list[dict] = []
+        self.codec_row_index: dict[str, int] = {}
         self.cards: dict[str, ThumbCard] = {}
 
         self.setWindowTitle(f"Video Finder {__version__} — 影片重複檢查")
@@ -162,6 +169,15 @@ class MainWindow(QMainWindow):
         hrow.addWidget(self.browse_btn)
         hrow.addWidget(self.scan_btn)
         outer.addWidget(header)
+
+        self.tabs = QTabWidget()
+        outer.addWidget(self.tabs, 1)
+
+        # ------------------------------------------------ tab: duplicates
+        dup_page = QWidget()
+        dup_layout = QVBoxLayout(dup_page)
+        dup_layout.setContentsMargins(0, 0, 0, 0)
+        dup_layout.setSpacing(10)
 
         frow = QHBoxLayout()
         frow.setSpacing(8)
@@ -206,7 +222,12 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
         splitter.setCollapsible(1, False)
-        outer.addWidget(splitter, 1)
+        dup_layout.addWidget(splitter, 1)
+
+        # ------------------------------------------------- tab: codecs
+        self.tabs.addTab(dup_page, "重複偵測")
+        codec_page = self._build_codec_page()
+        self.tabs.addTab(codec_page, "編碼掃描")
 
         self.status_label = QLabel("準備就緒")
         self.ffmpeg_label = QLabel("")
@@ -244,6 +265,193 @@ class MainWindow(QMainWindow):
         self.card_area.setWidget(self.card_frame)
         lay.addWidget(self.card_area, 1)
         return panel
+
+    # ------------------------------------------------------ codec scan tab
+    def _build_codec_page(self):
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(10)
+
+        frow = QHBoxLayout()
+        frow.setSpacing(8)
+        self.codec_search = QLineEdit()
+        self.codec_search.setPlaceholderText("搜尋檔名…")
+        self.codec_search.textChanged.connect(self._apply_codec_filter)
+        self.non_modern_chk = QCheckBox("只看非 AV1 / HEVC 的影片")
+        self.non_modern_chk.setChecked(self.cfg.codec_non_modern_only)
+        self.non_modern_chk.toggled.connect(self._apply_codec_filter)
+        self.codec_scan_btn = QPushButton("掃描編碼")
+        self.codec_scan_btn.clicked.connect(self.start_codec_scan)
+        frow.addWidget(self.codec_search, 1)
+        frow.addWidget(self.non_modern_chk)
+        frow.addWidget(self.codec_scan_btn)
+        lay.addLayout(frow)
+
+        self.codec_table = QTableWidget(0, 5)
+        self.codec_table.setHorizontalHeaderLabels(
+            ["檔名", "位置", "影片編碼", "音訊編碼", "大小"])
+        header = self.codec_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.Interactive)
+        for col in (2, 3, 4):
+            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.codec_table.verticalHeader().setVisible(False)
+        self.codec_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.codec_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.codec_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.codec_table.setAlternatingRowColors(True)
+        self.codec_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.codec_table.customContextMenuRequested.connect(self._on_codec_menu)
+        self.codec_table.itemDoubleClicked.connect(
+            lambda item, _col: self._open_path(item.data(Qt.UserRole)))
+        lay.addWidget(self.codec_table, 1)
+
+        self.codec_summary = QLabel("尚未掃描")
+        self.codec_summary.setObjectName("Muted")
+        lay.addWidget(self.codec_summary)
+        return page
+
+    @staticmethod
+    def _codec_label(code):
+        if not code:
+            return "未知"
+        nice = {
+            "hevc": "HEVC (H.265)",
+            "h265": "HEVC (H.265)",
+            "av1": "AV1",
+            "h264": "H.264 (AVC)",
+            "mpeg4": "MPEG-4",
+            "wmv2": "WMV2",
+            "wmv3": "WMV3",
+            "xvid": "DivX / Xvid (MPEG-4)",
+            "divx": "DivX / Xvid (MPEG-4)",
+            "vp9": "VP9",
+            "vp8": "VP8",
+        }
+        return nice.get(code.lower(), code)
+
+    @staticmethod
+    def _is_modern_codec(code):
+        return bool(code) and code.lower() in ("av1", "hevc", "h265")
+
+    def start_codec_scan(self):
+        root = self.root_edit.text().strip()
+        if not root or not os.path.isdir(root):
+            self.status_label.setText("請先選擇有效的資料夾")
+            return
+        ffprobe = find_ffprobe(find_ffmpeg(self.cfg))
+        if not ffprobe:
+            self.status_label.setText("未找到 ffprobe,無法掃描編碼")
+            return
+        if self.codec_worker is not None and self.codec_worker.isRunning():
+            return
+        self.codec_scan_btn.setEnabled(False)
+        self.codec_scan_btn.setText("掃描中")
+        self.codec_table.setRowCount(0)
+        self.codec_row_index.clear()
+        self.codec_results = []
+        self.codec_summary.setText("掃描中…")
+        self.status_label.setText(f"正在掃描編碼 {short_path(root, 60)} …")
+        self.codec_worker = CodecScanWorker(root, self.cfg.extensions, ffprobe)
+        self.codec_worker.progress.connect(self._on_codec_progress)
+        self.codec_worker.item_done.connect(self._on_codec_item)
+        self.codec_worker.finished_ok.connect(self._on_codec_done)
+        self.codec_worker.failed.connect(self._on_codec_failed)
+        self.codec_worker.start()
+
+    def _on_codec_progress(self, dirpath: str, total: int, shown: int):
+        self.status_label.setText(
+            f"編碼掃描 {short_path(dirpath, 56)}(已完成 {total}/{shown} 個檔案)")
+
+    def _on_codec_item(self, path: str, vcodec: str, acodec: str):
+        info = {"path": path, "vcodec": vcodec or None, "acodec": acodec or None}
+        row = self.codec_row_index.get(path)
+        if row is None or row >= self.codec_table.rowCount():
+            self._codec_append_row(info)
+        else:
+            self.codec_table.item(row, 2).setText(self._codec_label(info["vcodec"]))
+            self.codec_table.item(row, 3).setText(info["acodec"] or "")
+            self._apply_codec_row_color(row)
+
+    def _codec_append_row(self, info):
+        row = self.codec_table.rowCount()
+        self.codec_table.insertRow(row)
+        self.codec_row_index[info["path"]] = row
+        name = os.path.basename(info["path"])
+        name_item = QTableWidgetItem(name)
+        name_item.setData(Qt.UserRole, info["path"])
+        name_item.setToolTip(info["path"])
+        self.codec_table.setItem(row, 0, name_item)
+        self.codec_table.setItem(
+            row, 1, QTableWidgetItem(short_path(os.path.dirname(info["path"]), 46)))
+        self.codec_table.setItem(row, 2, QTableWidgetItem("掃描中…"))
+        self.codec_table.setItem(row, 3, QTableWidgetItem(""))
+        self.codec_table.setItem(row, 4, QTableWidgetItem(human_size(info["size"])))
+        self._apply_codec_row_color(row)
+
+    def _on_codec_done(self, results):
+        self.codec_scan_btn.setEnabled(True)
+        self.codec_scan_btn.setText("掃描編碼")
+        self.codec_results = results
+        self._apply_codec_filter()
+        total = len(results)
+        bad = sum(1 for r in results
+                  if r["vcodec"] and not self._is_modern_codec(r["vcodec"]))
+        unknown = sum(1 for r in results if not r["vcodec"])
+        self.codec_summary.setText(
+            f"共 {total} 個影片,其中 {bad} 個非 AV1/HEVC"
+            + (f"、{unknown} 個無法辨識" if unknown else ""))
+        self.status_label.setText(f"編碼掃描完成:{total} 個檔案")
+
+    def _on_codec_failed(self, message: str):
+        self.codec_scan_btn.setEnabled(True)
+        self.codec_scan_btn.setText("掃描編碼")
+        self.status_label.setText(f"編碼掃描失敗:{message}")
+
+    def _apply_codec_filter(self):
+        text = self.codec_search.text().strip().lower()
+        only_bad = self.non_modern_chk.isChecked()
+        self.codec_table.setRowCount(0)
+        self.codec_row_index.clear()
+        shown = 0
+        for info in self.codec_results:
+            if only_bad and self._is_modern_codec(info["vcodec"]):
+                continue
+            name = os.path.basename(info["path"]).lower()
+            if text and text not in name and text not in info["path"].lower():
+                continue
+            self._codec_append_row(info)
+            shown += 1
+        self.count_label.setText(
+            f"編碼:{shown} / {len(self.codec_results)} 個影片")
+
+    def _apply_codec_row_color(self, row: int):
+        item = self.codec_table.item(row, 0)
+        if item is None:
+            return
+        info = next((r for r in self.codec_results
+                     if r["path"] == item.data(Qt.UserRole)), None)
+        if info is not None and info["vcodec"] and not self._is_modern_codec(info["vcodec"]):
+            self.codec_table.item(row, 2).setForeground(QColor("#f59e0b"))
+
+    def _on_codec_menu(self, pos):
+        row = self.codec_table.rowAt(pos.y())
+        if row is None:
+            return
+        item = self.codec_table.item(row, 0)
+        if item is None:
+            return
+        path = item.data(Qt.UserRole)
+        menu = QMenu(self)
+        act_play = QAction("用預設播放器開啟", menu)
+        act_play.triggered.connect(lambda: self._open_path(path))
+        act_folder = QAction("開啟檔案所在資料夾", menu)
+        act_folder.triggered.connect(lambda: self._open_folder(path))
+        menu.addAction(act_play)
+        menu.addAction(act_folder)
+        menu.exec(self.codec_table.viewport().mapToGlobal(pos))
 
     # ------------------------------------------------------------- actions
     def _browse_folder(self):

@@ -82,6 +82,33 @@ ok = extract_thumb(ff, real.path, out, 0.2, cfg.thumbnail_width)
 print(f"thumbnail: ok={ok} size={os.path.getsize(out) if ok and os.path.exists(out) else '-'}")
 assert ok, "FFmpeg 截圖失敗"
 
+
+# ---- codec scan tab -------------------------------------------------------
+from video_finder.ffmpeg_backend import find_ffprobe  # noqa: E402
+from video_finder.workers import CodecScanWorker  # noqa: E402
+
+assert window.tabs.count() == 2 and window.tabs.tabText(1) == "編碼掃描"
+assert window.non_modern_chk.isChecked()
+ffprobe = find_ffprobe(ff)
+assert ffprobe, "ffprobe 未找到"
+cw = CodecScanWorker(ROOT, cfg.extensions, ffprobe)
+codec_results = []
+cw.finished_ok.connect(lambda r: codec_results.extend(r))
+cw.failed.connect(lambda m: (_ for _ in ()).throw(AssertionError(f"codec scan: {m}")))
+cw.start()
+import time  # noqa: E402
+deadline = time.time() + 60
+while cw.isRunning() and time.time() < deadline:
+    app.processEvents()
+    time.sleep(0.02)
+app.processEvents()
+assert len(codec_results) == len(files), "編碼掃描筆數不符"
+window.codec_results = codec_results
+window._apply_codec_filter()
+assert window.codec_table.rowCount() == len(codec_results), "編碼過濾顯示錯誤"
+print(f"codec scan: OK ({len(codec_results)} files, "
+      f"{sum(1 for r in codec_results if r['vcodec'])} detected)")
+
 if window.thumb_worker is not None:
     window.thumb_worker.wait(15000)
     window.thumb_worker = None

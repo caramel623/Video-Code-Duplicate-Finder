@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -93,3 +94,31 @@ def extract_thumb(ffmpeg_path, video, out_path, at_seconds, width):
     cmd[4] = "0.25"
     proc = _run(cmd)
     return proc.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 0
+
+
+def probe_video_codecs(ffprobe, video):
+    """Return (video_codec, audio_codecs) for *video* using ffprobe.
+
+    *video_codec* is the first video stream codec name (e.g. "hevc", "av1",
+    "h264") or None when no usable video stream is found.
+    *audio_codecs* is a comma-joined list of audio stream codecs.
+    """
+    if not ffprobe:
+        return None, None
+    try:
+        proc = _run([ffprobe, "-v", "error",
+                    "-show_entries", "stream=codec_type,codec_name",
+                    "-of", "json", video])
+        data = json.loads(proc.stdout.decode("utf-8", "ignore") or "{}")
+        video_codec = None
+        audio = []
+        for stream in data.get("streams", []):
+            codec_type = stream.get("codec_type")
+            codec_name = (stream.get("codec_name") or "").strip()
+            if codec_type == "video" and video_codec is None and codec_name:
+                video_codec = codec_name
+            elif codec_type == "audio" and codec_name:
+                audio.append(codec_name)
+        return video_codec, (",".join(audio) if audio else None)
+    except Exception:
+        return None, None

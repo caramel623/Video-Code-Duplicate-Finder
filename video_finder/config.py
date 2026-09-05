@@ -28,6 +28,7 @@ class Config:
     strip_disc: bool = True
     strip_quality: bool = True
     show_duplicates_only: bool = False
+    codec_non_modern_only: bool = True
     last_folder: str = ""
 
     @property
