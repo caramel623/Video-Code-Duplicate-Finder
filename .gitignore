@@ -1,29 +1,31 @@
-# Python bytecode and test output
+# Python
 __pycache__/
 *.py[cod]
 .pytest_cache/
-.coverage
-htmlcov/
-
-# Local environments and IDE state
 .venv/
 venv/
 .env
+
+# IDE
 .idea/
 .vscode/
 
-# Application-local state and generated media
-data/
-cache/
-logs/
+# App state / generated
+settings.json
+.thumbnails/
 *.sqlite
 *.sqlite3
+logs/
 
 # Build artifacts
 build/
 dist/
-*.spec
 
-# OS files
+# Local scratch / downloads
+ffmpeg-download.zip
+gui_screenshot.png
+_patch_all.py
+
+# OS
 Thumbs.db
 Desktop.ini

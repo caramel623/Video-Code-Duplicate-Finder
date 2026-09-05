@@ -1,0 +1,29 @@
+# Python bytecode and test output
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local environments and IDE state
+.venv/
+venv/
+.env
+.idea/
+.vscode/
+
+# Application-local state and generated media
+data/
+cache/
+logs/
+*.sqlite
+*.sqlite3
+
+# Build artifacts
+build/
+dist/
+*.spec
+
+# OS files
+Thumbs.db
+Desktop.ini
