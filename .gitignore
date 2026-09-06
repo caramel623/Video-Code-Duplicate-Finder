@@ -30,3 +30,6 @@ _patch_all.py
 # OS
 Thumbs.db
 Desktop.ini
+
+# Test fixtures (local only)
+test_videos/
