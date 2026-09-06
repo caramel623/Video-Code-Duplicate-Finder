@@ -135,7 +135,8 @@ class SettingsDialog(QDialog):
         self.handbrake_fmt.setCurrentIndex(max(idx, 0))
         fmt_row.addWidget(self.handbrake_fmt, 1)
         fmt_row.addStretch(1)
-        self.handbrake_backup = QCheckBox("轉碼完成後備份原檔(加入 .hborig)")
+        self.handbrake_backup = QCheckBox(
+            "保留原檔(轉碼後移動到程式資料夾 hb_originals，由您決定是否刪除)")
         self.handbrake_backup.setChecked(self.cfg.handbrake_keep_backup)
         self.handbrake_status = QLabel("")
         self.handbrake_status.setObjectName("Muted")

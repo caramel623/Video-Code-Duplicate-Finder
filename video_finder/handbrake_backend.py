@@ -32,6 +32,93 @@ CONTAINER_CHOICES = [
 # container (config value) -> HandBrakeCLI --format value
 _CONTAINER_FORMAT = {"mp4": "av_mp4", "mkv": "av_mkv"}
 
+# Subfolder (inside the program data dir) where ORIGINAL files are moved to
+# after a successful transcode, so the user can review/delete them later.
+ORIGINALS_DIRNAME = "hb_originals"
+# JSON file (inside the program data dir) keeping a rolling log of transcode
+# batches, so the "轉碼結果" tab can show the most recent run (or the previous
+# one when nothing has been transcoded this session).
+TRANSCODE_LOG_NAME = "transcode_log.json"
+_MAX_LOG_BATCHES = 20
+
+
+def originals_backup_dir():
+    """Folder (inside the program data dir) holding moved originals."""
+    return os.path.join(app_data_dir(), ORIGINALS_DIRNAME)
+
+
+def ensure_originals_dir():
+    d = originals_backup_dir()
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _move_file(src, dst):
+    """Move a file, handling cross-device moves on Windows.
+
+    `os.replace` cannot reliably replace a file across volumes on Windows
+    (raises ``[WinError 17]``), so fall back to ``shutil.move`` (copy +
+    delete) when the direct replace fails.
+    """
+    try:
+        os.replace(src, dst)
+    except OSError:
+        if os.path.exists(dst):
+            os.remove(dst)
+        shutil.move(src, dst)
+
+
+def unique_backup_path(src_name):
+    """Destination path for a moved original inside the originals folder.
+
+    Keeps the original base name; on collision appends a numeric suffix before
+    the extension (clip.mkv -> clip.1.mkv) so nothing is ever overwritten.
+    """
+    d = ensure_originals_dir()
+    base, ext = os.path.splitext(src_name)
+    candidate = os.path.join(d, src_name)
+    n = 1
+    while os.path.exists(candidate):
+        candidate = os.path.join(d, f"{base}.{n}{ext}")
+        n += 1
+    return candidate
+
+
+def transcode_log_path():
+    return os.path.join(app_data_dir(), TRANSCODE_LOG_NAME)
+
+
+def load_transcode_log():
+    """Return the list of recorded transcode batches (most recent last)."""
+    path = transcode_log_path()
+    if not os.path.isfile(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict):
+            data = data.get("batches", [])
+        if not isinstance(data, list):
+            return []
+        return [b for b in data if isinstance(b, dict)]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def append_transcode_batch(batch):
+    """Append *batch* to the log (capped) and persist it. Returns the list."""
+    batches = load_transcode_log()
+    if isinstance(batch, dict):
+        batches.append(batch)
+    batches = batches[-_MAX_LOG_BATCHES:]
+    try:
+        os.makedirs(os.path.dirname(transcode_log_path()), exist_ok=True)
+        with open(transcode_log_path(), "w", encoding="utf-8") as fh:
+            json.dump({"batches": batches}, fh, ensure_ascii=False, indent=2)
+    except Exception:  # noqa: BLE001
+        pass
+    return batches
+
 # Per-encoder extra flags (preset / tune), matching the recipe used in the
 # GUI-exported SAMPLE.json queue (AV1 preset 8 + vq tune).
 _ENCODER_OPTS = {
@@ -240,15 +327,20 @@ def replace_original(src_path, out_path, keep_backup, target_ext=None):
 
     When *target_ext* (the output container, e.g. "mp4") differs from the
     source extension, the finished encode is renamed to keep the same base
-    name with the new extension (e.g. clip.mkv -> clip.mp4). The backup
-    always keeps the original file name.
+    name with the new extension (e.g. clip.mkv -> clip.mp4).
 
-    Returns (ok: bool, detail: str, final_path: str).
+    The ORIGINAL file is handled per *keep_backup*:
+      * True  -> moved (not copied) into the program data folder's
+                 `hb_originals/` subfolder so the user can review or delete
+                 it later.
+      * False -> deleted directly.
+
+    Returns (ok: bool, detail: str, final_path: str, backup_path: str).
     """
     if not os.path.isfile(out_path) or os.path.getsize(out_path) <= 0:
-        return False, "輸出檔案不存在或為空", ""
+        return False, "輸出檔案不存在或為空", "", ""
     if not os.path.isfile(src_path):
-        return False, "原檔案已不存在", ""
+        return False, "原檔案已不存在", "", ""
     src_ext = os.path.splitext(src_path)[1].lstrip(".").lower()
     final_path = src_path
     if target_ext and target_ext.lower() != src_ext:
@@ -256,19 +348,24 @@ def replace_original(src_path, out_path, keep_backup, target_ext=None):
         final_path = f"{base}.{target_ext.lower()}"
         if os.path.exists(final_path):
             return (False,
-                    f"目標檔案已存在:{os.path.basename(final_path)}", "")
+                    f"目標檔案已存在:{os.path.basename(final_path)}", "", "")
+    backup_path = ""
     if keep_backup:
-        backup = src_path + ".hborig"
-        n = 1
-        while os.path.exists(backup):
-            backup = f"{src_path}.{n}.hborig"
-            n += 1
         try:
-            os.replace(src_path, backup)
+            backup_path = unique_backup_path(os.path.basename(src_path))
         except OSError as exc:
-            return False, f"備份原檔案失敗:{exc}", ""
+            return False, f"建立備份資料夾失敗:{exc}", "", ""
+        try:
+            _move_file(src_path, backup_path)
+        except OSError as exc:
+            return False, f"移動原檔失敗:{exc}", "", ""
+    else:
+        try:
+            os.remove(src_path)
+        except OSError as exc:
+            return False, f"刪除原檔失敗:{exc}", "", ""
     try:
         os.replace(out_path, final_path)
     except OSError as exc:
-        return False, f"替換原檔案失敗:{exc}", ""
-    return True, "", final_path
+        return False, f"替換原檔案失敗:{exc}", "", backup_path
+    return True, "", final_path, backup_path

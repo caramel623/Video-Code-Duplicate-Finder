@@ -17,6 +17,8 @@ settings.json
 *.sqlite
 *.sqlite3
 logs/
+hb_originals/
+transcode_log.json
 
 # Build artifacts
 build/

@@ -158,11 +158,11 @@ class HandBrakeWorker(QThread):
     renamed file (same base name, new extension).
 
     progress:   (path, percent, stage)  stage in {"scan", "encode"}
-    item_done:  (path, ok, detail, final_path)  per-file result
-    all_done:   no args                        everything finished
+    item_done:  (path, ok, detail, final_path, backup_path)  per-file result
+    all_done:   no args                                 everything finished
     """
     progress = Signal(str, int, str)
-    item_done = Signal(str, bool, str, str)
+    item_done = Signal(str, bool, str, str, str)
     all_done = Signal()
 
     def __init__(self, paths, cli, encoder, quality, keep_backup,
@@ -227,10 +227,11 @@ class HandBrakeWorker(QThread):
         ok = False
         detail = ""
         final = ""
+        backup = ""
         if self._stop:
             detail = "已取消"
         elif proc.returncode == 0 and os.path.isfile(out) and os.path.getsize(out) > 0:
-            ok, detail, final = replace_original(
+            ok, detail, final, backup = replace_original(
                 src, out, self.keep_backup, self.container)
         else:
             detail = f"HandBrake 傳回 {proc.returncode}"
@@ -239,7 +240,7 @@ class HandBrakeWorker(QThread):
                 os.remove(out)
         except OSError:
             pass
-        self.item_done.emit(src, ok, detail, final)
+        self.item_done.emit(src, ok, detail, final, backup)
 
 
 class FileCodecWorker(QThread):

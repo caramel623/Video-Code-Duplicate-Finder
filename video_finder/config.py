@@ -13,7 +13,14 @@ DEFAULT_EXTENSIONS = [
 
 
 def app_data_dir():
-    """Directory where portable data (settings.json, thumbnail cache) lives."""
+    """Directory where portable data (settings.json, thumbnail cache) lives.
+
+    Honors the VIDEO_FINDER_DATA_DIR environment override (used by tests and
+    for relocating the data); otherwise defaults to the program folder.
+    """
+    override = os.environ.get("VIDEO_FINDER_DATA_DIR")
+    if override:
+        return override
     if getattr(sys, "frozen", False):
         return os.path.dirname(os.path.abspath(sys.executable))
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

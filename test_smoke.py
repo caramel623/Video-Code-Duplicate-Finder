@@ -87,7 +87,9 @@ assert ok, "FFmpeg 截圖失敗"
 from video_finder.ffmpeg_backend import find_ffprobe  # noqa: E402
 from video_finder.workers import CodecScanWorker  # noqa: E402
 
-assert window.tabs.count() == 2 and window.tabs.tabText(1) == "編碼掃描"
+assert window.tabs.count() == 3, window.tabs.count()
+assert window.tabs.tabText(1) == "編碼掃描"
+assert window.tabs.tabText(2) == "轉碼結果"
 assert window.non_modern_chk.isChecked()
 ffprobe = find_ffprobe(ff)
 assert ffprobe, "ffprobe 未找到"

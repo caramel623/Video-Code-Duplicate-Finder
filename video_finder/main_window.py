@@ -31,7 +31,12 @@ from PySide6.QtWidgets import (
 from . import __version__
 from .config import Config
 from .ffmpeg_backend import ffmpeg_version, find_ffmpeg, find_ffprobe, probe_video_codecs
-from .handbrake_backend import find_handbrake
+from .handbrake_backend import (
+    append_transcode_batch,
+    find_handbrake,
+    load_transcode_log,
+    originals_backup_dir,
+)
 from .scanner import VideoFile, VideoGroup, group_files
 from .settings_dialog import SettingsDialog
 from .util import human_size, open_folder, open_with_default, short_path
@@ -148,6 +153,7 @@ class MainWindow(QMainWindow):
         self.hb_worker = None
         self.codec_encode_status: dict[str, str] = {}
         self.codec_row_index: dict[str, int] = {}
+        self._hb_batch: dict | None = None
         self.cards: dict[str, ThumbCard] = {}
 
         self.setWindowTitle(f"Video Finder {__version__} — 影片重複檢查")
@@ -245,6 +251,10 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(dup_page, "重複偵測")
         codec_page = self._build_codec_page()
         self.tabs.addTab(codec_page, "編碼掃描")
+        hb_page = self._build_hb_results_page()
+        self._hb_results_tab_index = self.tabs.addTab(hb_page, "轉碼結果")
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+        self.refresh_hb_results()
 
         self.status_label = QLabel("準備就緒")
         self.ffmpeg_label = QLabel("")
@@ -334,6 +344,191 @@ class MainWindow(QMainWindow):
         self.codec_summary.setObjectName("Muted")
         lay.addWidget(self.codec_summary)
         return page
+
+    # --------------------------------------------------- transcode results tab
+    def _build_hb_results_page(self):
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(10)
+
+        self.hb_batch_label = QLabel("尚無轉碼記錄")
+        self.hb_batch_label.setObjectName("Muted")
+        self.hb_batch_label.setWordWrap(True)
+        lay.addWidget(self.hb_batch_label)
+
+        trow = QHBoxLayout()
+        trow.setSpacing(8)
+        self.hb_play_btn = QPushButton("▶ 播放選取")
+        self.hb_play_btn.setToolTip("用系統預設撥放器開啟選取的輸出檔")
+        self.hb_play_btn.clicked.connect(self._play_hb_selected)
+        self.hb_open_out_btn = QPushButton("開啟輸出資料夾")
+        self.hb_open_out_btn.setToolTip("開啟選取項輸出檔所在的資料夾")
+        self.hb_open_out_btn.clicked.connect(lambda: self._open_hb_row_folder(1))
+        self.hb_open_orig_btn = QPushButton("開啟原檔備份資料夾")
+        self.hb_open_orig_btn.setToolTip("開啟程式資料夾內的原檔備份(hb_originals)")
+        self.hb_open_orig_btn.clicked.connect(self._open_hb_originals)
+        self.hb_refresh_btn = QPushButton("重新整理")
+        self.hb_refresh_btn.setProperty("variant", "secondary")
+        self.hb_refresh_btn.clicked.connect(self.refresh_hb_results)
+        trow.addWidget(self.hb_play_btn)
+        trow.addWidget(self.hb_open_out_btn)
+        trow.addWidget(self.hb_open_orig_btn)
+        trow.addStretch(1)
+        trow.addWidget(self.hb_refresh_btn)
+        lay.addLayout(trow)
+
+        self.hb_table = QTableWidget(0, 5)
+        self.hb_table.setHorizontalHeaderLabels(
+            ["檔案", "輸出路徑", "原檔備份", "大小", "狀態"])
+        header = self.hb_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.Interactive)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.hb_table.verticalHeader().setVisible(False)
+        self.hb_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.hb_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.hb_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.hb_table.setAlternatingRowColors(True)
+        self.hb_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.hb_table.customContextMenuRequested.connect(self._on_hb_results_menu)
+        self.hb_table.itemDoubleClicked.connect(
+            lambda item, _col: self._play_hb_path(item.data(Qt.UserRole)))
+        lay.addWidget(self.hb_table, 1)
+
+        self.hb_results_summary = QLabel("")
+        self.hb_results_summary.setObjectName("Muted")
+        lay.addWidget(self.hb_results_summary)
+        return page
+
+    def refresh_hb_results(self):
+        """Re-read the transcode log and show the most recent batch.
+
+        If nothing has been transcoded this session, the most recent recorded
+        batch (i.e. the previous run) is shown.
+        """
+        batches = load_transcode_log()
+        batch = batches[-1] if batches else None
+        self.hb_table.setRowCount(0)
+        if not batch:
+            self.hb_batch_label.setText(
+                "尚無轉碼記錄 — 到「編碼掃描」分頁執行轉碼後,結果會顯示在這裡")
+            self.hb_results_summary.setText("")
+            return
+        enc = batch.get("encoder_label") or batch.get("encoder") or ""
+        fmt = batch.get("container") or ""
+        t = batch.get("time") or ""
+        items = batch.get("items", []) or []
+        self.hb_batch_label.setText(
+            f"轉碼批次:{t}　編碼器:{enc}　輸出格式:.{fmt}　檔案數:{len(items)}")
+        done = sum(1 for it in items if it.get("ok"))
+        for it in items:
+            self._hb_append_row(it)
+        self.hb_results_summary.setText(
+            f"成功 {done}/{len(items)}　雙擊列或按「▶ 播放選取」可用系統預設撥放器確認;"
+            "原檔已移動到 hb_originals,確認無誤後可自行刪除。")
+
+    def _hb_append_row(self, it):
+        row = self.hb_table.rowCount()
+        self.hb_table.insertRow(row)
+        out = it.get("out") or it.get("src") or ""
+        src = it.get("src") or ""
+        ok = bool(it.get("ok"))
+        detail = it.get("detail") or ""
+        backup = it.get("original") or ""
+
+        name_item = QTableWidgetItem(os.path.basename(out) or os.path.basename(src) or "(未知)")
+        name_item.setData(Qt.UserRole, out)
+        name_item.setToolTip(src)
+        self.hb_table.setItem(row, 0, name_item)
+
+        out_item = QTableWidgetItem(short_path(out, 54))
+        out_item.setData(Qt.UserRole, out)
+        out_item.setToolTip(out)
+        self.hb_table.setItem(row, 1, out_item)
+
+        orig_item = QTableWidgetItem(short_path(backup, 40) if backup else "(未保留)")
+        orig_item.setData(Qt.UserRole, backup)
+        orig_item.setToolTip(backup)
+        self.hb_table.setItem(row, 2, orig_item)
+
+        size = ""
+        if out and os.path.isfile(out):
+            try:
+                size = human_size(os.path.getsize(out))
+            except OSError:
+                size = ""
+        self.hb_table.setItem(row, 3, QTableWidgetItem(size))
+
+        status_item = QTableWidgetItem("成功" if ok else (detail or "失敗"))
+        status_item.setForeground(QColor("#34d399") if ok else QColor("#f87171"))
+        status_item.setToolTip(detail if not ok else "")
+        self.hb_table.setItem(row, 4, status_item)
+
+    def _on_tab_changed(self, index):
+        if index == getattr(self, "_hb_results_tab_index", -1):
+            self.refresh_hb_results()
+
+    def _play_hb_path(self, path):
+        if not path or not os.path.isfile(path):
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.information(
+                self, "找不到檔案",
+                "檔案不存在,可能已被移動或刪除:\n" + (path or ""))
+            return
+        if not open_with_default(path):
+            self.status_label.setText(f"無法開啟:{short_path(path, 50)}")
+
+    def _play_hb_selected(self):
+        rows = sorted({i.row() for i in self.hb_table.selectionModel().selectedRows()})
+        if not rows:
+            self.status_label.setText("請先選取要播放的轉碼結果")
+            return
+        item = self.hb_table.item(rows[0], 0)
+        path = item.data(Qt.UserRole) if item else None
+        self._play_hb_path(path)
+
+    def _open_hb_row_folder(self, col):
+        rows = sorted({i.row() for i in self.hb_table.selectionModel().selectedRows()})
+        if not rows:
+            self.status_label.setText("請先選取一列")
+            return
+        item = self.hb_table.item(rows[0], col)
+        path = item.data(Qt.UserRole) if item else None
+        if path and os.path.isfile(path):
+            open_folder(path, select_file=True)
+
+    def _open_hb_originals(self):
+        d = originals_backup_dir()
+        try:
+            os.makedirs(d, exist_ok=True)
+        except OSError:
+            pass
+        open_folder(d)
+
+    def _on_hb_results_menu(self, pos):
+        row = self.hb_table.rowAt(pos.y())
+        if row is None:
+            return
+        out_item = self.hb_table.item(row, 0)
+        out = out_item.data(Qt.UserRole) if out_item else None
+        orig_item = self.hb_table.item(row, 2)
+        orig = orig_item.data(Qt.UserRole) if orig_item else None
+        menu = QMenu(self)
+        act_play = menu.addAction("▶ 播放(系統預設撥放器)")
+        act_play.triggered.connect(lambda: self._play_hb_path(out))
+        menu.addSeparator()
+        act_out = menu.addAction("開啟輸出所在資料夾")
+        act_out.setEnabled(bool(out and os.path.isfile(out)))
+        act_out.triggered.connect(
+            lambda: out and os.path.isfile(out) and open_folder(out, select_file=True))
+        act_orig = menu.addAction("開啟原檔備份所在資料夾")
+        act_orig.setEnabled(bool(orig and os.path.isfile(orig)))
+        act_orig.triggered.connect(
+            lambda: orig and os.path.isfile(orig) and open_folder(orig, select_file=True))
+        menu.exec(self.hb_table.viewport().mapToGlobal(pos))
 
     @staticmethod
     def _codec_label(code):
@@ -496,6 +691,15 @@ class MainWindow(QMainWindow):
             self.status_label.setText(f"HandBrake 轉碼 {len(ready)} 個檔案…")
         self.codec_encode_btn.setEnabled(False)
         self.codec_encode_btn.setText("轉碼中…")
+        from datetime import datetime
+        self._hb_batch = {
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "encoder": self.cfg.handbrake_encoder,
+            "encoder_label": self._encoder_label(),
+            "container": self.cfg.handbrake_container,
+            "quality": self.cfg.handbrake_quality,
+            "items": [],
+        }
         ffprobe = find_ffprobe(find_ffmpeg(self.cfg))
         self.hb_worker = HandBrakeWorker(
             ready, cli, self.cfg.handbrake_encoder,
@@ -511,7 +715,16 @@ class MainWindow(QMainWindow):
         self.status_label.setText(
             f"HandBrake 轉碼 {short_path(os.path.basename(path), 40)}:{percent}%")
 
-    def _on_hb_item(self, path: str, ok: bool, detail: str, final_path: str):
+    def _on_hb_item(self, path: str, ok: bool, detail: str, final_path: str,
+                    backup_path: str):
+        if self._hb_batch is not None:
+            self._hb_batch["items"].append({
+                "src": path,
+                "out": final_path or path,
+                "ok": bool(ok),
+                "detail": detail,
+                "original": backup_path or "",
+            })
         row = self.codec_row_index.get(path)
         renamed = bool(ok and final_path and final_path != path)
         if renamed:
@@ -567,7 +780,15 @@ class MainWindow(QMainWindow):
         done = sum(1 for s in self.codec_encode_status.values() if s == "done")
         failed = sum(1 for s in self.codec_encode_status.values() if s == "fail")
         extra = f"、失敗 {failed}" if failed else ""
-        backup = "、原檔已備份為 .hborig" if self.cfg.handbrake_keep_backup else ""
+        if self.cfg.handbrake_keep_backup:
+            backup = "、原檔已移至 hb_originals"
+        else:
+            backup = "、原檔已刪除"
+        batch = self._hb_batch
+        self._hb_batch = None
+        if batch and batch.get("items"):
+            append_transcode_batch(batch)
+            self.refresh_hb_results()
         self.status_label.setText(f"HandBrake 轉碼完成:成功 {done}{extra}{backup}")
 
     def _apply_codec_filter(self):
