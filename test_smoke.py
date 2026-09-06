@@ -109,6 +109,28 @@ assert window.codec_table.rowCount() == len(codec_results), "編碼過濾顯示�
 print(f"codec scan: OK ({len(codec_results)} files, "
       f"{sum(1 for r in codec_results if r['vcodec'])} detected)")
 
+# ---- duplicate tab: optional codec scan populates the 編碼 column --------
+assert window.dup_codec_chk is not None, "缺少「掃描編碼」選項"
+assert window.dup_codec_chk.text() == "掃描編碼"
+assert window.tree.columnCount() == 6, "重規清單有編碼欄"
+window.dup_codec_results.clear()
+window._start_dup_codec_scan()
+deadline = time.time() + 60
+while (window.dup_codec_worker is not None and window.dup_codec_worker.isRunning()
+       and time.time() < deadline):
+    app.processEvents()
+    time.sleep(0.02)
+app.processEvents()
+assert window.dup_codec_worker is None, "編碼掃描未完成"
+detected = sum(1 for i in window.dup_codec_results.values() if (i or {}).get("vcodec"))
+assert len(window.dup_codec_results) == len(files), "編碼結果等不符"
+assert detected >= 2, "至少兩個真実影片應識別出編碼"
+idx = next(i for i, g in enumerate(window.groups) if g.title == "AVOP-123")
+avop_row = window.tree.topLevelItem(idx)
+assert avop_row.text(5) != "—", "AVOP-123 縣組編碼欄有顛示編碼"
+assert avop_row.child(0).text(5) != "—", "檔案子節點編碼欄有顛示編碼"
+print(f"dup codec: OK ({len(files)} probed, {detected} detected, AVOP-123 => {avop_row.text(5)})")
+
 if window.thumb_worker is not None:
     window.thumb_worker.wait(15000)
     window.thumb_worker = None

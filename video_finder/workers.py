@@ -147,3 +147,39 @@ class CodecScanWorker(QThread):
             self.finished_ok.emit(results)
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(str(exc))
+
+
+class FileCodecWorker(QThread):
+    """Probe codecs for an explicit list of video files (no directory re-walk)."""
+    item_done = Signal(str, str, str)
+    finished_ok = Signal(list)
+    failed = Signal(str)
+
+    def __init__(self, files, ffprobe):
+        super().__init__()
+        self.files = list(files)
+        self.ffprobe = ffprobe
+        self._stop = False
+
+    def stop(self):
+        self._stop = True
+
+    def run(self):
+        try:
+            from .ffmpeg_backend import probe_video_codecs
+            results = []
+            for vf in self.files:
+                if self._stop:
+                    break
+                vcodec, acodec = (None, None)
+                if self.ffprobe:
+                    try:
+                        vcodec, acodec = probe_video_codecs(self.ffprobe, vf.path)
+                    except Exception:  # noqa: BLE001
+                        vcodec, acodec = None, None
+                results.append({"path": vf.path, "size": vf.size,
+                                "vcodec": vcodec, "acodec": acodec})
+                self.item_done.emit(vf.path, vcodec or "", acodec or "")
+            self.finished_ok.emit(results)
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))

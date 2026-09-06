@@ -34,7 +34,13 @@ from .ffmpeg_backend import ffmpeg_version, find_ffmpeg, find_ffprobe
 from .scanner import VideoFile, VideoGroup, group_files
 from .settings_dialog import SettingsDialog
 from .util import human_size, open_folder, open_with_default, short_path
-from .workers import CodecScanWorker, ScanWorker, ThumbWorker, thumb_cache_path
+from .workers import (
+    CodecScanWorker,
+    FileCodecWorker,
+    ScanWorker,
+    ThumbWorker,
+    thumb_cache_path,
+)
 
 CARD_W = 168
 CARD_H = 94
@@ -135,6 +141,8 @@ class MainWindow(QMainWindow):
         self.codec_results: list[dict] = []
         self.codec_visible: list[dict] = []
         self.codec_row_index: dict[str, int] = {}
+        self.dup_codec_worker = None
+        self.dup_codec_results: dict[str, dict] = {}
         self.cards: dict[str, ThumbCard] = {}
 
         self.setWindowTitle(f"Video Finder {__version__} — 影片重複檢查")
@@ -187,6 +195,9 @@ class MainWindow(QMainWindow):
         self.dups_chk = QCheckBox("只看重複")
         self.dups_chk.setChecked(self.cfg.show_duplicates_only)
         self.dups_chk.toggled.connect(self._on_dups_toggled)
+        self.dup_codec_chk = QCheckBox("掃描編碼")
+        self.dup_codec_chk.setChecked(self.cfg.dup_scan_codecs)
+        self.dup_codec_chk.toggled.connect(self._on_dup_codec_toggled)
         self.settings_btn = QPushButton("⚙ 設定")
         self.settings_btn.setProperty("variant", "secondary")
         self.settings_btn.clicked.connect(self._open_settings)
@@ -195,6 +206,7 @@ class MainWindow(QMainWindow):
         self.count_label.setAlignment(Qt.AlignVCenter)
         frow.addWidget(self.search_edit, 1)
         frow.addWidget(self.dups_chk)
+        frow.addWidget(self.dup_codec_chk)
         frow.addWidget(self.settings_btn)
         frow.addStretch(1)
         frow.addWidget(self.count_label)
@@ -202,10 +214,10 @@ class MainWindow(QMainWindow):
 
         splitter = QSplitter(Qt.Horizontal)
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["", "片名", "檔案數", "總大小", "位置"])
+        self.tree.setHeaderLabels(["", "片名", "檔案數", "總大小", "位置", "編碼"])
         self.tree.header().setSectionResizeMode(1, QHeaderView.Stretch)
         self.tree.header().setSectionResizeMode(4, QHeaderView.Interactive)
-        for col in (0, 2, 3):
+        for col in (0, 2, 3, 5):
             self.tree.header().setSectionResizeMode(col, QHeaderView.ResizeToContents)
         self.tree.setRootIsDecorated(True)
         self.tree.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -493,6 +505,8 @@ class MainWindow(QMainWindow):
         self.scan_btn.setText("掃描")
         self.files = files
         self._apply_filter()
+        if self.dup_codec_chk.isChecked():
+            self._start_dup_codec_scan()
         if self.visible_groups:
             self.tree.setCurrentItem(self.tree.topLevelItem(0))
             self._select_group(self.visible_groups[0])
@@ -524,6 +538,85 @@ class MainWindow(QMainWindow):
         self.cfg.save()
         self._apply_filter()
 
+    def _on_dup_codec_toggled(self, checked: bool):
+        self.cfg.dup_scan_codecs = checked
+        self.cfg.save()
+        if checked:
+            self._start_dup_codec_scan()
+        elif self.dup_codec_worker is not None and self.dup_codec_worker.isRunning():
+            self.dup_codec_worker.stop()
+
+    def _start_dup_codec_scan(self):
+        if not self.files:
+            return
+        if self.dup_codec_worker is not None and self.dup_codec_worker.isRunning():
+            return
+        ff = find_ffmpeg(self.cfg)
+        ffprobe = find_ffprobe(ff)
+        if not ffprobe:
+            self.status_label.setText("找不到 ffprobe，無法掃描編碼")
+            return
+        self.dup_codec_chk.setEnabled(False)
+        self.dup_codec_chk.setText("掃描編碼中…")
+        self.dup_codec_worker = FileCodecWorker(self.files, ffprobe)
+        self.dup_codec_worker.item_done.connect(self._on_dup_codec_item)
+        self.dup_codec_worker.finished_ok.connect(self._on_dup_codec_done)
+        self.dup_codec_worker.failed.connect(self._on_dup_codec_failed)
+        self.dup_codec_worker.start()
+
+    def _on_dup_codec_item(self, path: str, vcodec: str, acodec: str):
+        self.dup_codec_results[path] = {"vcodec": vcodec or None, "acodec": acodec or None}
+        self._refresh_dup_codec_cells()
+
+    def _on_dup_codec_done(self, results):
+        self.dup_codec_worker = None
+        self.dup_codec_chk.setEnabled(True)
+        self.dup_codec_chk.setText("掃描編碼")
+        self._refresh_dup_codec_cells()
+        scanned = sum(1 for r in results if r.get("vcodec"))
+        self.status_label.setText(f"編碼掃描完成:{scanned}/{len(results)} 個檔案已識別")
+
+    def _on_dup_codec_failed(self, message: str):
+        self.dup_codec_worker = None
+        self.dup_codec_chk.setEnabled(True)
+        self.dup_codec_chk.setText("掃描編碼")
+        self.status_label.setText(f"編碼掃描失敗:{message}")
+
+    def _dup_file_codec(self, vf):
+        code = (self.dup_codec_results.get(vf.path) or {}).get("vcodec")
+        return self._codec_label(code) if code else "—"
+
+    def _dup_group_codec(self, group):
+        labels = []
+        for vf in group.files:
+            code = (self.dup_codec_results.get(vf.path) or {}).get("vcodec")
+            if not code:
+                continue
+            lab = self._codec_label(code)
+            if lab not in labels:
+                labels.append(lab)
+        return ", ".join(labels) if labels else "—"
+
+    def _refresh_dup_codec_cells(self):
+        for i in range(self.tree.topLevelItemCount()):
+            root = self.tree.topLevelItem(i)
+            labels = []
+            for j in range(root.childCount()):
+                child = root.child(j)
+                path = child.childCount() if False else child.data(0, Qt.UserRole)
+                info = self.dup_codec_results.get(path) or {}
+                code = info.get("vcodec")
+                if code:
+                    lab = self._codec_label(code)
+                    child.setText(5, lab)
+                    if lab not in labels:
+                        labels.append(lab)
+                else:
+                    child.setText(5, "—")
+                audio = info.get("acodec")
+                child.setToolTip(5, ("音訊:" + audio) if audio else "")
+            root.setText(5, ", ".join(labels) if labels else "—")
+
     def _fill_tree(self):
         bold = QFont()
         bold.setBold(True)
@@ -541,15 +634,20 @@ class MainWindow(QMainWindow):
             folders = sorted({os.path.dirname(f.path) for f in group.files})
             loc = short_path(folders[0], 46) if len(folders) == 1 else f"{len(folders)} 個資料夾"
             root_item = QTreeWidgetItem([badge, group.title, str(len(group.files)),
-                                         human_size(group.total_size), loc])
+                                         human_size(group.total_size), loc,
+                                         self._dup_group_codec(group)])
             root_item.setFont(1, bold)
             root_item.setForeground(0, badge_color)
             root_item.setData(0, Qt.UserRole, group.key)
             for vf in group.files:
                 child = QTreeWidgetItem(["", os.path.basename(vf.path), "",
                                          human_size(vf.size),
-                                         short_path(os.path.dirname(vf.path), 46)])
+                                         short_path(os.path.dirname(vf.path), 46),
+                                         self._dup_file_codec(vf)])
                 child.setData(0, Qt.UserRole, vf.path)
+                audio = (self.dup_codec_results.get(vf.path) or {}).get("acodec")
+                if audio:
+                    child.setToolTip(5, "音訊:" + audio)
                 root_item.addChild(child)
             self.tree.addTopLevelItem(root_item)
             if group.is_duplicate or group.is_segments:
@@ -617,6 +715,9 @@ class MainWindow(QMainWindow):
             self.dups_chk.blockSignals(True)
             self.dups_chk.setChecked(self.cfg.show_duplicates_only)
             self.dups_chk.blockSignals(False)
+            self.dup_codec_chk.blockSignals(True)
+            self.dup_codec_chk.setChecked(self.cfg.dup_scan_codecs)
+            self.dup_codec_chk.blockSignals(False)
             self._apply_filter()
 
     # ------------------------------------------------------------- details

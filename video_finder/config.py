@@ -29,6 +29,7 @@ class Config:
     strip_quality: bool = True
     show_duplicates_only: bool = False
     codec_non_modern_only: bool = True
+    dup_scan_codecs: bool = False
     last_folder: str = ""
 
     @property

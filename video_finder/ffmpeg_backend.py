@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 
 from .config import app_data_dir
 
@@ -24,6 +25,11 @@ def candidate_ffmpeg_paths(cfg):
     paths = []
     if cfg.ffmpeg_path:
         paths.append(cfg.ffmpeg_path)
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        # PyInstaller one-file bundles extract here at runtime.
+        paths.append(os.path.join(meipass, "ffmpeg.exe"))
+        paths.append(os.path.join(meipass, "ffmpeg", "ffmpeg.exe"))
     base = app_data_dir()
     paths.append(os.path.join(base, "ffmpeg.exe"))
     paths.append(os.path.join(base, "ffmpeg", "ffmpeg.exe"))

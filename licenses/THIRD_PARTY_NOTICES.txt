@@ -1,0 +1,43 @@
+Third-Party Notices
+Video Code Duplicate Finder (VideoFinder)
+
+This application is released under the MIT License (see LICENSE).
+It bundles and depends on the following third-party components, each
+governed by its own license.
+
+--------------------------------------------------------------------
+FFmpeg (ffmpeg.exe, ffprobe.exe)
+--------------------------------------------------------------------
+Version / build : N-126390-g9fc8c785e2-20260903
+Source          : https://github.com/FFmpeg/FFmpeg
+Prebuilt by     : Gyan D. (https://www.gyan.dev/ffmpeg/builds/)
+License         : GNU General Public License v3 (GPL v3)
+                  (built with --enable-gpl --enable-version3)
+License text    : ffmpeg-GPL.txt (this folder)
+
+These binaries are NOT part of the MIT-licensed application. They are
+distributed as separate, unmodified public FFmpeg builds and are invoked
+by the application as external command-line processes (they are not linked
+into the Python code).
+
+GPL v3 compliance notes for redistribution:
+- The full license text is provided in this folder (ffmpeg-GPL.txt).
+- The exact build configuration is reproducible from `ffmpeg -version` /
+  `ffmpeg -buildconf` plus the FFmpeg source repository above.
+- A written offer is made to provide the complete corresponding source for
+  the FFmpeg binaries on a durable medium; the identical prebuilt binaries
+  can also be downloaded from https://www.gyan.dev/ffmpeg/builds/.
+- Some libraries linked into the FFmpeg build carry their own licenses
+  (e.g. LGPL, BSD, or other). Those terms apply to the respective libraries.
+
+--------------------------------------------------------------------
+PySide6 / Qt
+--------------------------------------------------------------------
+PySide6 (Qt for Python) is provided under the GNU Lesser General Public
+License v3 (LGPLv3), the GNU General Public License (GPL), or a commercial
+license. This application uses it as a separate library.
+See https://www.qt.io/licensing for the full terms.
+
+Each third-party component remains the property of its original copyright
+holders. Bundling it with this application does not place it under the
+MIT License.
