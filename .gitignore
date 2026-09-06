@@ -26,6 +26,7 @@ dist/
 ffmpeg-download.zip
 gui_screenshot.png
 _patch_all.py
+SAMPLE.json
 
 # OS
 Thumbs.db
@@ -33,3 +34,4 @@ Desktop.ini
 
 # Test fixtures (local only)
 test_videos/
+.cptr
