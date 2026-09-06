@@ -22,6 +22,16 @@ ENCODER_CHOICES = [
     ("x265", "HEVC 8-bit (x265)"),
 ]
 
+# Output container choices offered in the settings dialog. "mp4" is the
+# default; encoded files are renamed so the extension matches the container.
+CONTAINER_CHOICES = [
+    ("mp4", "MP4 (.mp4)"),
+    ("mkv", "MKV (.mkv)"),
+]
+
+# container (config value) -> HandBrakeCLI --format value
+_CONTAINER_FORMAT = {"mp4": "av_mp4", "mkv": "av_mkv"}
+
 # Per-encoder extra flags (preset / tune), matching the recipe used in the
 # GUI-exported SAMPLE.json queue (AV1 preset 8 + vq tune).
 _ENCODER_OPTS = {
@@ -40,6 +50,8 @@ _UNSUPPORTED = {
 }
 
 # ext -> HandBrakeCLI --format value; None = auto-detected from file name.
+# (Legacy: used only by unsupported_reason(); encode_command now takes an
+# explicit output container.)
 _FORMAT_BY_EXT = {
     "mp4": "av_mp4", "m4v": "av_mp4", "mov": "av_mp4",
     "mkv": "av_mkv", "webm": "av_webm",
@@ -120,18 +132,24 @@ def handbrake_version(cli_path):
         return ""
 
 
-def temp_output_path(src_path):
-    """Unique temp destination next to *src_path* (same drive = fast rename)."""
-    base, ext = os.path.splitext(src_path)
-    return f"{base}.hfout-{int(time.time() * 1000)}{ext}"
+def temp_output_path(src_path, container="mp4"):
+    """Unique temp destination next to *src_path* (same drive = fast rename).
+
+    The temp file uses the *output* container's extension, since the final
+    encode is renamed to match the configured output format.
+    """
+    base = os.path.splitext(src_path)[0]
+    return f"{base}.hfout-{int(time.time() * 1000)}.{container.lower()}"
 
 
-def encode_command(cli_path, src_path, out_path, encoder, quality):
-    """Build the HandBrakeCLI argument list for one input file."""
-    ext = os.path.splitext(src_path)[1].lstrip(".").lower()
-    fmt = _FORMAT_BY_EXT.get(ext)
-    if fmt is None and not ext:
-        fmt = "av_mp4"
+def encode_command(cli_path, src_path, out_path, encoder, quality,
+                   container="mp4"):
+    """Build the HandBrakeCLI argument list for one input file.
+
+    *container* is the configured output format ("mp4" or "mkv"); the
+    source container is irrelevant, HandBrake demuxes anything it can read.
+    """
+    fmt = _CONTAINER_FORMAT.get(container, "av_mp4")
     cmd = [cli_path,
            "--json",
            "-i", src_path,
@@ -139,11 +157,13 @@ def encode_command(cli_path, src_path, out_path, encoder, quality):
            "-e", encoder,
            "-q", str(quality),
            "--audio-copy-mask", "aac,ac3,eac3,truehd,dts,dtshd,mp2,mp3,opus,vorbis,flac,alac",
-           "-E", "copy"]
+           "-E", "copy",
+           # If a track cannot be copied as-is (e.g. opus into MP4),
+           # re-encode it to AAC instead of failing.
+           "--audio-fallback", "av_aac"]
     for flag in _ENCODER_OPTS.get(encoder, []):
         cmd.extend([flag])
-    if fmt:
-        cmd.extend(["-f", fmt])
+    cmd.extend(["-f", fmt])
     if fmt == "av_mp4":
         cmd.append("--optimize")
     return cmd
@@ -215,15 +235,28 @@ class ProgressReader:
             return None
 
 
-def replace_original(src_path, out_path, keep_backup):
+def replace_original(src_path, out_path, keep_backup, target_ext=None):
     """Replace *src_path* with the finished encode.
 
-    Returns (ok: bool, detail: str).
+    When *target_ext* (the output container, e.g. "mp4") differs from the
+    source extension, the finished encode is renamed to keep the same base
+    name with the new extension (e.g. clip.mkv -> clip.mp4). The backup
+    always keeps the original file name.
+
+    Returns (ok: bool, detail: str, final_path: str).
     """
     if not os.path.isfile(out_path) or os.path.getsize(out_path) <= 0:
-        return False, "輸出檔案不存在或為空"
+        return False, "輸出檔案不存在或為空", ""
     if not os.path.isfile(src_path):
-        return False, "原檔案已不存在"
+        return False, "原檔案已不存在", ""
+    src_ext = os.path.splitext(src_path)[1].lstrip(".").lower()
+    final_path = src_path
+    if target_ext and target_ext.lower() != src_ext:
+        base = os.path.splitext(src_path)[0]
+        final_path = f"{base}.{target_ext.lower()}"
+        if os.path.exists(final_path):
+            return (False,
+                    f"目標檔案已存在:{os.path.basename(final_path)}", "")
     if keep_backup:
         backup = src_path + ".hborig"
         n = 1
@@ -233,9 +266,9 @@ def replace_original(src_path, out_path, keep_backup):
         try:
             os.replace(src_path, backup)
         except OSError as exc:
-            return False, f"備份原檔案失敗:{exc}"
+            return False, f"備份原檔案失敗:{exc}", ""
     try:
-        os.replace(out_path, src_path)
+        os.replace(out_path, final_path)
     except OSError as exc:
-        return False, f"替換原檔案失敗:{exc}"
-    return True, ""
+        return False, f"替換原檔案失敗:{exc}", ""
+    return True, "", final_path

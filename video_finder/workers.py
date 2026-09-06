@@ -153,15 +153,20 @@ class HandBrakeWorker(QThread):
     """Encode a list of video files with HandBrakeCLI and replace the
     original file once each encode succeeds.
 
+    *container* is the output format ("mp4" or "mkv"); when it differs from
+    the source extension the finished encode replaces the original under a
+    renamed file (same base name, new extension).
+
     progress:   (path, percent, stage)  stage in {"scan", "encode"}
-    item_done:  (path, ok, detail)      per-file result
-    all_done:   no args                 everything finished
+    item_done:  (path, ok, detail, final_path)  per-file result
+    all_done:   no args                        everything finished
     """
     progress = Signal(str, int, str)
-    item_done = Signal(str, bool, str)
+    item_done = Signal(str, bool, str, str)
     all_done = Signal()
 
-    def __init__(self, paths, cli, encoder, quality, keep_backup):
+    def __init__(self, paths, cli, encoder, quality, keep_backup,
+                 container="mp4"):
         super().__init__()
         from .handbrake_backend import ProgressReader, encode_command
         self._encode_command = encode_command
@@ -170,6 +175,7 @@ class HandBrakeWorker(QThread):
         self.cli = cli
         self.encoder = encoder
         self.quality = quality
+        self.container = container.lower()
         self.keep_backup = keep_backup
         self._stop = False
         self._proc = None
@@ -196,8 +202,9 @@ class HandBrakeWorker(QThread):
     def _encode_one(self, src, index):
         import subprocess
         from .handbrake_backend import replace_original, temp_output_path
-        out = temp_output_path(src)
-        cmd = self._encode_command(self.cli, src, out, self.encoder, self.quality)
+        out = temp_output_path(src, self.container)
+        cmd = self._encode_command(self.cli, src, out, self.encoder,
+                                   self.quality, self.container)
         kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT,
                   "stdin": subprocess.DEVNULL}
         if os.name == "nt":
@@ -219,10 +226,12 @@ class HandBrakeWorker(QThread):
         # Clean up the temp output on failure/cancel.
         ok = False
         detail = ""
+        final = ""
         if self._stop:
             detail = "已取消"
         elif proc.returncode == 0 and os.path.isfile(out) and os.path.getsize(out) > 0:
-            ok, detail = replace_original(src, out, self.keep_backup)
+            ok, detail, final = replace_original(
+                src, out, self.keep_backup, self.container)
         else:
             detail = f"HandBrake 傳回 {proc.returncode}"
         try:
@@ -230,7 +239,7 @@ class HandBrakeWorker(QThread):
                 os.remove(out)
         except OSError:
             pass
-        self.item_done.emit(src, ok, detail)
+        self.item_done.emit(src, ok, detail, final)
 
 
 class FileCodecWorker(QThread):

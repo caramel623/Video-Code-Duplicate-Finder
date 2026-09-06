@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
 from . import __version__
 from .config import Config
 from .ffmpeg_backend import ffmpeg_version, find_ffmpeg, find_ffprobe, probe_video_codecs
-from .handbrake_backend import find_handbrake, unsupported_reason
+from .handbrake_backend import find_handbrake
 from .scanner import VideoFile, VideoGroup, group_files
 from .settings_dialog import SettingsDialog
 from .util import human_size, open_folder, open_with_default, short_path
@@ -474,10 +474,6 @@ class MainWindow(QMainWindow):
             if self._is_modern_codec(info.get("vcodec")):
                 skipped += 1
                 continue
-            ext = os.path.splitext(path)[1].lstrip(".")
-            if unsupported_reason(ext, self.cfg.handbrake_encoder):
-                skipped += 1
-                continue
             if self.codec_encode_status.get(path) == "enc":
                 skipped += 1
                 continue
@@ -495,7 +491,7 @@ class MainWindow(QMainWindow):
                 "HandBrakeCLI.exe 的安裝位置後再試。")
             return
         if skipped:
-            self.status_label.setText(f"略過 {skipped} 個(已是 AV1/HEVC 或不支援),轉碼 {len(ready)} 個…")
+            self.status_label.setText(f"略過 {skipped} 個(已是 AV1/HEVC),轉碼 {len(ready)} 個…")
         else:
             self.status_label.setText(f"HandBrake 轉碼 {len(ready)} 個檔案…")
         self.codec_encode_btn.setEnabled(False)
@@ -503,7 +499,8 @@ class MainWindow(QMainWindow):
         ffprobe = find_ffprobe(find_ffmpeg(self.cfg))
         self.hb_worker = HandBrakeWorker(
             ready, cli, self.cfg.handbrake_encoder,
-            self.cfg.handbrake_quality, self.cfg.handbrake_keep_backup)
+            self.cfg.handbrake_quality, self.cfg.handbrake_keep_backup,
+            self.cfg.handbrake_container)
         self.hb_worker.progress.connect(self._on_hb_progress)
         self.hb_worker.item_done.connect(self._on_hb_item)
         self.hb_worker.all_done.connect(self._on_hb_all_done)
@@ -514,8 +511,13 @@ class MainWindow(QMainWindow):
         self.status_label.setText(
             f"HandBrake 轉碼 {short_path(os.path.basename(path), 40)}:{percent}%")
 
-    def _on_hb_item(self, path: str, ok: bool, detail: str):
+    def _on_hb_item(self, path: str, ok: bool, detail: str, final_path: str):
         row = self.codec_row_index.get(path)
+        renamed = bool(ok and final_path and final_path != path)
+        if renamed:
+            self._renamed_codec_path(path, final_path, row)
+            path = final_path
+            row = self.codec_row_index.get(path)
         if ok:
             self.codec_encode_status[path] = "done"
             ffprobe = getattr(self.hb_worker, "_ffprobe", None)
@@ -531,9 +533,32 @@ class MainWindow(QMainWindow):
             self.codec_encode_status[path] = "fail"
             if row is not None:
                 self._apply_codec_row_color(row)
+        if ok:
+            if renamed:
+                note = f"(已替換為 {os.path.splitext(path)[1]})"
+            else:
+                note = "(已替換原檔)"
+        else:
+            note = f"(失敗:{detail})"
         self.status_label.setText(
-            f"完成:{short_path(os.path.basename(path), 40)}"
-            + ("(已替換原檔)" if ok else f"(失敗:{detail})"))
+            f"完成:{short_path(os.path.basename(path), 40)}{note}")
+
+    def _renamed_codec_path(self, old: str, new: str, row):
+        """Re-key table row / index / status after a successful encode
+        changed the file name to match the output container."""
+        info = next((r for r in self.codec_results if r["path"] == old), None)
+        if info is not None:
+            info["path"] = new
+        if row is not None:
+            item = self.codec_table.item(row, 0)
+            if item is not None:
+                item.setText(os.path.basename(new))
+                item.setData(Qt.UserRole, new)
+                item.setToolTip(new)
+        self.codec_row_index.pop(old, None)
+        if row is not None:
+            self.codec_row_index[new] = row
+        self.codec_encode_status.pop(old, None)
 
     def _on_hb_all_done(self):
         self.hb_worker = None

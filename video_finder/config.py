@@ -34,6 +34,7 @@ class Config:
     handbrake_path: str = ""
     handbrake_encoder: str = "svt_av1_10bit"
     handbrake_quality: int = 32
+    handbrake_container: str = "mp4"
     handbrake_keep_backup: bool = True
 
     @property

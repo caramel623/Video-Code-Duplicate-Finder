@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from .config import DEFAULT_EXTENSIONS
 from .ffmpeg_backend import candidate_ffmpeg_paths, ffmpeg_version, find_ffmpeg
 from .handbrake_backend import (
+    CONTAINER_CHOICES,
     ENCODER_CHOICES,
     candidate_handbrake_paths,
     find_handbrake,
@@ -125,6 +126,15 @@ class SettingsDialog(QDialog):
         self.handbrake_quality.setRange(1, 60)
         self.handbrake_quality.setValue(self.cfg.handbrake_quality)
         enc_row.addWidget(self.handbrake_quality, 1)
+        fmt_row = QHBoxLayout()
+        fmt_row.addWidget(QLabel("輸出格式"))
+        self.handbrake_fmt = QComboBox()
+        for value, label in CONTAINER_CHOICES:
+            self.handbrake_fmt.addItem(label, value)
+        idx = self.handbrake_fmt.findData(self.cfg.handbrake_container)
+        self.handbrake_fmt.setCurrentIndex(max(idx, 0))
+        fmt_row.addWidget(self.handbrake_fmt, 1)
+        fmt_row.addStretch(1)
         self.handbrake_backup = QCheckBox("轉碼完成後備份原檔(加入 .hborig)")
         self.handbrake_backup.setChecked(self.cfg.handbrake_keep_backup)
         self.handbrake_status = QLabel("")
@@ -132,6 +142,7 @@ class SettingsDialog(QDialog):
         self.handbrake_status.setWordWrap(True)
         hb_layout.addLayout(hb_row)
         hb_layout.addLayout(enc_row)
+        hb_layout.addLayout(fmt_row)
         hb_layout.addWidget(self.handbrake_backup)
         hb_layout.addWidget(self.handbrake_status)
         root.addWidget(hb_group)
@@ -239,6 +250,7 @@ class SettingsDialog(QDialog):
         self.cfg.handbrake_path = self.handbrake_edit.text().strip()
         self.cfg.handbrake_encoder = self.handbrake_enc.currentData()
         self.cfg.handbrake_quality = self.handbrake_quality.value()
+        self.cfg.handbrake_container = self.handbrake_fmt.currentData()
         self.cfg.handbrake_keep_backup = self.handbrake_backup.isChecked()
         self.cfg.thumbnail_seconds = self.thumb_seconds.value()
         self.cfg.thumbnail_width = self.thumb_width.value()
