@@ -149,6 +149,90 @@ class CodecScanWorker(QThread):
             self.failed.emit(str(exc))
 
 
+class HandBrakeWorker(QThread):
+    """Encode a list of video files with HandBrakeCLI and replace the
+    original file once each encode succeeds.
+
+    progress:   (path, percent, stage)  stage in {"scan", "encode"}
+    item_done:  (path, ok, detail)      per-file result
+    all_done:   no args                 everything finished
+    """
+    progress = Signal(str, int, str)
+    item_done = Signal(str, bool, str)
+    all_done = Signal()
+
+    def __init__(self, paths, cli, encoder, quality, keep_backup):
+        super().__init__()
+        from .handbrake_backend import ProgressReader, encode_command
+        self._encode_command = encode_command
+        self._ProgressReader = ProgressReader
+        self.paths = list(paths)
+        self.cli = cli
+        self.encoder = encoder
+        self.quality = quality
+        self.keep_backup = keep_backup
+        self._stop = False
+        self._proc = None
+
+    def stop(self):
+        self._stop = True
+        if self._proc is not None:
+            try:
+                self._proc.kill()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def run(self):
+        import subprocess
+        for index, src in enumerate(self.paths):
+            if self._stop:
+                break
+            try:
+                self._encode_one(src, index)
+            except Exception as exc:  # noqa: BLE001
+                self.item_done.emit(src, False, str(exc))
+        self.all_done.emit()
+
+    def _encode_one(self, src, index):
+        import subprocess
+        from .handbrake_backend import replace_original, temp_output_path
+        out = temp_output_path(src)
+        cmd = self._encode_command(self.cli, src, out, self.encoder, self.quality)
+        kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT,
+                  "stdin": subprocess.DEVNULL}
+        if os.name == "nt":
+            kwargs["creationflags"] = 0x08000000
+        proc = subprocess.Popen(cmd, **kwargs)
+        self._proc = proc
+        reader = self._ProgressReader()
+        try:
+            for raw in iter(proc.stdout.readline, b""):
+                if self._stop:
+                    break
+                line = raw.decode("utf-8", "ignore")
+                percent = reader.feed(line)
+                if percent is not None:
+                    self.progress.emit(src, percent, "encode")
+        finally:
+            proc.wait()
+            self._proc = None
+        # Clean up the temp output on failure/cancel.
+        ok = False
+        detail = ""
+        if self._stop:
+            detail = "已取消"
+        elif proc.returncode == 0 and os.path.isfile(out) and os.path.getsize(out) > 0:
+            ok, detail = replace_original(src, out, self.keep_backup)
+        else:
+            detail = f"HandBrake 傳回 {proc.returncode}"
+        try:
+            if os.path.isfile(out):
+                os.remove(out)
+        except OSError:
+            pass
+        self.item_done.emit(src, ok, detail)
+
+
 class FileCodecWorker(QThread):
     """Probe codecs for an explicit list of video files (no directory re-walk)."""
     item_done = Signal(str, str, str)

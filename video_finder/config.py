@@ -31,6 +31,10 @@ class Config:
     codec_non_modern_only: bool = True
     dup_scan_codecs: bool = False
     last_folder: str = ""
+    handbrake_path: str = ""
+    handbrake_encoder: str = "svt_av1_10bit"
+    handbrake_quality: int = 32
+    handbrake_keep_backup: bool = True
 
     @property
     def settings_file(self):

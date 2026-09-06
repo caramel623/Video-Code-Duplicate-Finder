@@ -1,9 +1,11 @@
 ﻿from __future__ import annotations
 
+import os
 from dataclasses import replace
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -20,6 +22,12 @@ from PySide6.QtWidgets import (
 
 from .config import DEFAULT_EXTENSIONS
 from .ffmpeg_backend import candidate_ffmpeg_paths, ffmpeg_version, find_ffmpeg
+from .handbrake_backend import (
+    ENCODER_CHOICES,
+    candidate_handbrake_paths,
+    find_handbrake,
+    handbrake_version,
+)
 
 
 def _parse_exts(text):
@@ -37,7 +45,7 @@ class SettingsDialog(QDialog):
         self.cfg = replace(cfg)
         self.cfg.extensions = list(cfg.extensions)
         self.setWindowTitle("設定")
-        self.resize(560, 640)
+        self.resize(580, 780)
         self._build()
 
     def _build(self):
@@ -90,6 +98,44 @@ class SettingsDialog(QDialog):
         ff_layout.addWidget(self.ffmpeg_status)
         root.addWidget(ff_group)
         self._refresh_ffmpeg_status()
+
+        # ---- handbrake ------------------------------------------------------
+        hb_group = QGroupBox("HandBrake(轉碼用)")
+        hb_layout = QVBoxLayout(hb_group)
+        hb_row = QHBoxLayout()
+        self.handbrake_edit = QLineEdit()
+        self.handbrake_edit.setPlaceholderText(
+            "留空 = 自動偵測(優先使用設定路徑,再試標準安裝位置與 PATH)")
+        self.handbrake_edit.setText(self.cfg.handbrake_path)
+        self.handbrake_browse = QPushButton("瀏覽...")
+        self.handbrake_browse.setProperty("variant", "secondary")
+        self.handbrake_browse.clicked.connect(self._browse_handbrake)
+        hb_row.addWidget(self.handbrake_edit, 1)
+        hb_row.addWidget(self.handbrake_browse)
+        enc_row = QHBoxLayout()
+        enc_row.addWidget(QLabel("目標編碼器"))
+        self.handbrake_enc = QComboBox()
+        for value, label in ENCODER_CHOICES:
+            self.handbrake_enc.addItem(label, value)
+        idx = self.handbrake_enc.findData(self.cfg.handbrake_encoder)
+        self.handbrake_enc.setCurrentIndex(max(idx, 0))
+        enc_row.addWidget(self.handbrake_enc, 1)
+        enc_row.addWidget(QLabel("品質"))
+        self.handbrake_quality = QSpinBox()
+        self.handbrake_quality.setRange(1, 60)
+        self.handbrake_quality.setValue(self.cfg.handbrake_quality)
+        enc_row.addWidget(self.handbrake_quality, 1)
+        self.handbrake_backup = QCheckBox("轉碼完成後備份原檔(加入 .hborig)")
+        self.handbrake_backup.setChecked(self.cfg.handbrake_keep_backup)
+        self.handbrake_status = QLabel("")
+        self.handbrake_status.setObjectName("Muted")
+        self.handbrake_status.setWordWrap(True)
+        hb_layout.addLayout(hb_row)
+        hb_layout.addLayout(enc_row)
+        hb_layout.addWidget(self.handbrake_backup)
+        hb_layout.addWidget(self.handbrake_status)
+        root.addWidget(hb_group)
+        self._refresh_handbrake_status()
 
         # ---- options -------------------------------------------------------
         opt_group = QGroupBox("截圖與比對選項")
@@ -166,9 +212,34 @@ class SettingsDialog(QDialog):
             tried = "、".join(p for p in candidate_ffmpeg_paths(cfg))
             self.ffmpeg_status.setText(f"未找到 FFmpeg。嘗試過:{tried}")
 
+    # ---- handbrake ------------------------------------------------------------
+    def _browse_handbrake(self):
+        start = os.path.dirname(self.handbrake_edit.text()) or os.path.expanduser("~")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "選擇 HandBrakeCLI.exe", start,
+            "HandBrake CLI (HandBrakeCLI.exe);;執行檔 (*.exe)")
+        if path:
+            self.handbrake_edit.setText(path)
+            self._refresh_handbrake_status()
+
+    def _refresh_handbrake_status(self):
+        cfg = self.cfg
+        cfg.handbrake_path = self.handbrake_edit.text().strip()
+        resolved = find_handbrake(cfg)
+        if resolved:
+            self.handbrake_status.setText(f"將使用:{resolved}\n{handbrake_version(resolved)}")
+        else:
+            self.handbrake_status.setText(
+                "未找到 HandBrakeCLI。請先安裝 HandBrake 並在上方指定 "
+                "HandBrakeCLI.exe 的位置。")
+
     # ---- save ----------------------------------------------------------------
     def _save(self):
         self.cfg.ffmpeg_path = self.cfg.ffmpeg_path.strip()
+        self.cfg.handbrake_path = self.handbrake_edit.text().strip()
+        self.cfg.handbrake_encoder = self.handbrake_enc.currentData()
+        self.cfg.handbrake_quality = self.handbrake_quality.value()
+        self.cfg.handbrake_keep_backup = self.handbrake_backup.isChecked()
         self.cfg.thumbnail_seconds = self.thumb_seconds.value()
         self.cfg.thumbnail_width = self.thumb_width.value()
         self.cfg.strip_disc = self.chk_disc.isChecked()

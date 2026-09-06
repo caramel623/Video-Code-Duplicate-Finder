@@ -30,13 +30,15 @@ from PySide6.QtWidgets import (
 
 from . import __version__
 from .config import Config
-from .ffmpeg_backend import ffmpeg_version, find_ffmpeg, find_ffprobe
+from .ffmpeg_backend import ffmpeg_version, find_ffmpeg, find_ffprobe, probe_video_codecs
+from .handbrake_backend import find_handbrake, unsupported_reason
 from .scanner import VideoFile, VideoGroup, group_files
 from .settings_dialog import SettingsDialog
 from .util import human_size, open_folder, open_with_default, short_path
 from .workers import (
     CodecScanWorker,
     FileCodecWorker,
+    HandBrakeWorker,
     ScanWorker,
     ThumbWorker,
     thumb_cache_path,
@@ -143,6 +145,9 @@ class MainWindow(QMainWindow):
         self.codec_row_index: dict[str, int] = {}
         self.dup_codec_worker = None
         self.dup_codec_results: dict[str, dict] = {}
+        self.hb_worker = None
+        self.codec_encode_status: dict[str, str] = {}
+        self.codec_row_index: dict[str, int] = {}
         self.cards: dict[str, ThumbCard] = {}
 
         self.setWindowTitle(f"Video Finder {__version__} — 影片重複檢查")
@@ -295,9 +300,14 @@ class MainWindow(QMainWindow):
         self.non_modern_chk.toggled.connect(self._apply_codec_filter)
         self.codec_scan_btn = QPushButton("掃描編碼")
         self.codec_scan_btn.clicked.connect(self.start_codec_scan)
+        self.codec_encode_btn = QPushButton("轉碼選取並替換")
+        self.codec_encode_btn.setToolTip(
+            "用 HandBrake 將選取的影片轉碼為 AV1/HEVC(參數見設定),完成後替換原檔案")
+        self.codec_encode_btn.clicked.connect(self.start_codec_encode)
         frow.addWidget(self.codec_search, 1)
         frow.addWidget(self.non_modern_chk)
         frow.addWidget(self.codec_scan_btn)
+        frow.addWidget(self.codec_encode_btn)
         lay.addLayout(frow)
 
         self.codec_table = QTableWidget(0, 5)
@@ -400,7 +410,8 @@ class MainWindow(QMainWindow):
             row, 1, QTableWidgetItem(short_path(os.path.dirname(info["path"]), 46)))
         self.codec_table.setItem(row, 2, QTableWidgetItem("掃描中…"))
         self.codec_table.setItem(row, 3, QTableWidgetItem(""))
-        self.codec_table.setItem(row, 4, QTableWidgetItem(human_size(info["size"])))
+        self.codec_table.setItem(
+            row, 4, QTableWidgetItem(human_size(info.get("size", 0))))
         self._apply_codec_row_color(row)
 
     def _on_codec_done(self, results):
@@ -421,6 +432,118 @@ class MainWindow(QMainWindow):
         self.codec_scan_btn.setEnabled(True)
         self.codec_scan_btn.setText("掃描編碼")
         self.status_label.setText(f"編碼掃描失敗:{message}")
+
+    # ------------------------------------------------------------- handbrake
+    def _encoder_label(self):
+        from .handbrake_backend import ENCODER_CHOICES
+        enc = self.cfg.handbrake_encoder
+        return dict(ENCODER_CHOICES).get(enc, enc)
+
+    def _selected_codec_paths(self):
+        """Paths of the selected rows (only non-modern codecs), or []."""
+        paths = []
+        for index in self.codec_table.selectionModel().selectedRows():
+            row = index.row()
+            item = self.codec_table.item(row, 0)
+            if item is None:
+                continue
+            paths.append(item.data(Qt.UserRole))
+        return paths
+
+    def start_codec_encode(self, explicit_paths=None):
+        if self.hb_worker is not None and self.hb_worker.isRunning():
+            self.status_label.setText("HandBrake 正在轉碼中…")
+            return
+        if explicit_paths:
+            paths = list(explicit_paths)
+        else:
+            selected = self._selected_codec_paths()
+            if selected:
+                paths = selected
+            else:
+                # No selection: offer everything visible that needs re-encoding.
+                paths = [info["path"] for info in self.codec_results
+                         if not self._is_modern_codec(info.get("vcodec"))]
+        # Keep only existing files that are not already modern and not in flight.
+        ready, skipped = [], 0
+        for path in paths:
+            info = next((r for r in self.codec_results if r["path"] == path), None)
+            if info is None or not os.path.isfile(path):
+                skipped += 1
+                continue
+            if self._is_modern_codec(info.get("vcodec")):
+                skipped += 1
+                continue
+            ext = os.path.splitext(path)[1].lstrip(".")
+            if unsupported_reason(ext, self.cfg.handbrake_encoder):
+                skipped += 1
+                continue
+            if self.codec_encode_status.get(path) == "enc":
+                skipped += 1
+                continue
+            ready.append(path)
+        if not ready:
+            self.status_label.setText(
+                f"沒有可轉碼的影片(需先掃描編碼並選取非 AV1/HEVC 檔案){'、略過 ' + str(skipped) if skipped else ''}")
+            return
+        cli = find_handbrake(self.cfg)
+        if not cli:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.information(
+                self, "HandBrake 未設定",
+                "尚未找到 HandBrakeCLI。\n\n請到「⚙ 設定 → HandBrake」指定 "
+                "HandBrakeCLI.exe 的安裝位置後再試。")
+            return
+        if skipped:
+            self.status_label.setText(f"略過 {skipped} 個(已是 AV1/HEVC 或不支援),轉碼 {len(ready)} 個…")
+        else:
+            self.status_label.setText(f"HandBrake 轉碼 {len(ready)} 個檔案…")
+        self.codec_encode_btn.setEnabled(False)
+        self.codec_encode_btn.setText("轉碼中…")
+        ffprobe = find_ffprobe(find_ffmpeg(self.cfg))
+        self.hb_worker = HandBrakeWorker(
+            ready, cli, self.cfg.handbrake_encoder,
+            self.cfg.handbrake_quality, self.cfg.handbrake_keep_backup)
+        self.hb_worker.progress.connect(self._on_hb_progress)
+        self.hb_worker.item_done.connect(self._on_hb_item)
+        self.hb_worker.all_done.connect(self._on_hb_all_done)
+        self.hb_worker._ffprobe = ffprobe
+        self.hb_worker.start()
+
+    def _on_hb_progress(self, path: str, percent: int, stage: str):
+        self.status_label.setText(
+            f"HandBrake 轉碼 {short_path(os.path.basename(path), 40)}:{percent}%")
+
+    def _on_hb_item(self, path: str, ok: bool, detail: str):
+        row = self.codec_row_index.get(path)
+        if ok:
+            self.codec_encode_status[path] = "done"
+            ffprobe = getattr(self.hb_worker, "_ffprobe", None)
+            if ffprobe:
+                vcodec, acodec = probe_video_codecs(ffprobe, path)
+                info = next((r for r in self.codec_results if r["path"] == path), None)
+                if info is not None:
+                    info["vcodec"] = vcodec
+                    info["acodec"] = acodec
+            if row is not None:
+                self._apply_codec_row_color(row)
+        else:
+            self.codec_encode_status[path] = "fail"
+            if row is not None:
+                self._apply_codec_row_color(row)
+        self.status_label.setText(
+            f"完成:{short_path(os.path.basename(path), 40)}"
+            + ("(已替換原檔)" if ok else f"(失敗:{detail})"))
+
+    def _on_hb_all_done(self):
+        self.hb_worker = None
+        self.codec_encode_btn.setEnabled(True)
+        self.codec_encode_btn.setText("轉碼選取並替換")
+        done = sum(1 for s in self.codec_encode_status.values() if s == "done")
+        failed = sum(1 for s in self.codec_encode_status.values() if s == "fail")
+        extra = f"、失敗 {failed}" if failed else ""
+        backup = "、原檔已備份為 .hborig" if self.cfg.handbrake_keep_backup else ""
+        self.status_label.setText(f"HandBrake 轉碼完成:成功 {done}{extra}{backup}")
 
     def _apply_codec_filter(self):
         text = self.codec_search.text().strip().lower()
@@ -445,8 +568,23 @@ class MainWindow(QMainWindow):
             return
         info = next((r for r in self.codec_results
                      if r["path"] == item.data(Qt.UserRole)), None)
-        if info is not None and info["vcodec"] and not self._is_modern_codec(info["vcodec"]):
-            self.codec_table.item(row, 2).setForeground(QColor("#f59e0b"))
+        if info is None:
+            return
+        status = self.codec_encode_status.get(info["path"])
+        col2 = self.codec_table.item(row, 2)
+        if status == "enc":
+            col2.setText(self._codec_label(info["vcodec"]) + " → 轉碼中…")
+            col2.setForeground(QColor("#38bdf8"))
+        elif status == "done":
+            col2.setText((self._codec_label(info["vcodec"]) + " → "
+                          + self._encoder_label()) if info["vcodec"] else self._encoder_label())
+            col2.setForeground(QColor("#34d399"))
+        elif status == "fail":
+            col2.setText((self._codec_label(info["vcodec"]) + " → 轉碼失敗")
+                          if info["vcodec"] else "轉碼失敗")
+            col2.setForeground(QColor("#f87171"))
+        elif info["vcodec"] and not self._is_modern_codec(info["vcodec"]):
+            col2.setForeground(QColor("#f59e0b"))
 
     def _on_codec_menu(self, pos):
         row = self.codec_table.rowAt(pos.y())
@@ -456,13 +594,20 @@ class MainWindow(QMainWindow):
         if item is None:
             return
         path = item.data(Qt.UserRole)
+        info = next((r for r in self.codec_results if r["path"] == path), None)
         menu = QMenu(self)
         act_play = QAction("用預設播放器開啟", menu)
         act_play.triggered.connect(lambda: self._open_path(path))
         act_folder = QAction("開啟檔案所在資料夾", menu)
         act_folder.triggered.connect(lambda: self._open_folder(path))
+        act_encode = QAction(f"轉碼為 {self._encoder_label()} 並替換", menu)
+        busy = (self.hb_worker is not None and self.hb_worker.isRunning())
+        already = bool(info and self._is_modern_codec(info.get("vcodec")))
+        act_encode.setEnabled(not busy and not already)
+        act_encode.triggered.connect(lambda: self.start_codec_encode([path]))
         menu.addAction(act_play)
         menu.addAction(act_folder)
+        menu.addAction(act_encode)
         menu.exec(self.codec_table.viewport().mapToGlobal(pos))
 
     # ------------------------------------------------------------- actions
