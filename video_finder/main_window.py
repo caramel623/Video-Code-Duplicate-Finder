@@ -562,7 +562,7 @@ class MainWindow(QMainWindow):
             self.codec_worker.stop()
             self.status_label.setText("正在停止編碼掃描 …")
             return
-        root = self.root_edit.text().strip()
+        root = os.path.normpath(self.root_edit.text().strip())
         if not root or not os.path.isdir(root):
             self.status_label.setText("請先選擇有效的資料夾")
             return
@@ -879,6 +879,10 @@ class MainWindow(QMainWindow):
         folder = QFileDialog.getExistingDirectory(self, "選擇資料夾", start)
         if not folder:
             return
+        # Qt returns "/" separators even on Windows ("Z:/影片/…"); normalize to
+        # native paths so every downstream path (os.walk, ffprobe, HandBrake,
+        # explorer /select) uses backslashes.
+        folder = os.path.normpath(folder)
         self.root_edit.setText(folder)
         self.cfg.last_folder = folder
         self.cfg.save()
@@ -897,7 +901,7 @@ class MainWindow(QMainWindow):
             self.scan_worker.stop()
             self.status_label.setText("正在停止掃描 …")
             return
-        root = self.root_edit.text().strip()
+        root = os.path.normpath(self.root_edit.text().strip())
         if not root or not os.path.isdir(root):
             self.status_label.setText("請先選擇有效的資料夾")
             return

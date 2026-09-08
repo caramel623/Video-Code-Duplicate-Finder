@@ -211,7 +211,7 @@ class SettingsDialog(QDialog):
         path, _ = QFileDialog.getOpenFileName(
             self, "選擇 ffmpeg.exe", "", "ffmpeg (*.exe)")
         if path:
-            self.ffmpeg_edit.setText(path)
+            self.ffmpeg_edit.setText(os.path.normpath(path))
             self._refresh_ffmpeg_status()
 
     def _refresh_ffmpeg_status(self):
@@ -231,7 +231,7 @@ class SettingsDialog(QDialog):
             self, "選擇 HandBrakeCLI.exe", start,
             "HandBrake CLI (HandBrakeCLI.exe);;執行檔 (*.exe)")
         if path:
-            self.handbrake_edit.setText(path)
+            self.handbrake_edit.setText(os.path.normpath(path))
             self._refresh_handbrake_status()
 
     def _refresh_handbrake_status(self):

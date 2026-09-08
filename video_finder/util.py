@@ -24,7 +24,10 @@ def human_size(n):
 
 def open_with_default(path):
     """Open *path* with the OS default application. Returns True on success."""
-    if not path or not os.path.exists(path):
+    if not path:
+        return False
+    path = os.path.normpath(path)
+    if not os.path.exists(path):
         return False
     try:
         if os.name == "nt":
@@ -42,10 +45,16 @@ def open_folder(path, select_file=False):
     """Open a file's folder in the OS file manager.
 
     When *select_file* is True and *path* is a file, the manager highlights it.
-    Works for local paths and mapped network (SMB) drive letters.
+    Works for local paths, mapped-drive (SMB) and UNC paths.
     """
     if not path:
         return False
+    # Normalize separators: Qt file dialogs (and users) can produce "/" paths
+    # such as "Z:/影片/事件影音". explorer's "/select," argument parser does
+    # NOT understand forward slashes and silently falls back to opening the
+    # Desktop instead of the file's folder. normpath() also keeps the leading
+    # "\\\\" of UNC paths intact.
+    path = os.path.normpath(path)
     try:
         if os.name == "nt":
             if select_file and os.path.isfile(path):
