@@ -45,18 +45,29 @@ class ScanWorker(QThread):
     progress = Signal(str, int)
     finished_ok = Signal(list)
     failed = Signal(str)
+    stopped = Signal()
 
     def __init__(self, root, exts):
         super().__init__()
         self.root = root
         self.exts = {e.lower().lstrip(".") for e in exts if e}
+        self._stop = False
+
+    def stop(self):
+        """Request an early stop; the walk finishes the current directory and
+        emits the (partial) results collected so far."""
+        self._stop = True
 
     def run(self):
         try:
             files = []
             for dirpath, dirnames, filenames in os.walk(self.root):
+                if self._stop:
+                    break
                 dirnames.sort(key=str.lower)
                 for name in sorted(filenames, key=str.lower):
+                    if self._stop:
+                        break
                     ext = os.path.splitext(name)[1].lstrip(".").lower()
                     if ext not in self.exts:
                         continue
@@ -67,6 +78,8 @@ class ScanWorker(QThread):
                         continue
                     files.append(VideoFile(path=path, size=st.st_size, mtime=st.st_mtime))
                 self.progress.emit(dirpath, len(files))
+            if self._stop:
+                self.stopped.emit()
             self.finished_ok.emit(files)
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(str(exc))

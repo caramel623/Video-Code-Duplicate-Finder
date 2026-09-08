@@ -143,8 +143,10 @@ class MainWindow(QMainWindow):
         self.groups: list[VideoGroup] = []
         self.visible_groups: list[VideoGroup] = []
         self.scan_worker = None
+        self._scan_stopped = False
         self.thumb_worker = None
         self.codec_worker = None
+        self._codec_scan_stopped = False
         self.codec_results: list[dict] = []
         self.codec_visible: list[dict] = []
         self.codec_row_index: dict[str, int] = {}
@@ -554,6 +556,12 @@ class MainWindow(QMainWindow):
         return bool(code) and code.lower() in ("av1", "hevc", "h265")
 
     def start_codec_scan(self):
+        # While running the button acts as "停止" -> request a stop.
+        if self.codec_worker is not None and self.codec_worker.isRunning():
+            self._codec_scan_stopped = True
+            self.codec_worker.stop()
+            self.status_label.setText("正在停止編碼掃描 …")
+            return
         root = self.root_edit.text().strip()
         if not root or not os.path.isdir(root):
             self.status_label.setText("請先選擇有效的資料夾")
@@ -562,10 +570,10 @@ class MainWindow(QMainWindow):
         if not ffprobe:
             self.status_label.setText("未找到 ffprobe,無法掃描編碼")
             return
-        if self.codec_worker is not None and self.codec_worker.isRunning():
-            return
-        self.codec_scan_btn.setEnabled(False)
-        self.codec_scan_btn.setText("掃描中")
+        self._codec_scan_stopped = False
+        self.codec_scan_btn.setText("停止")
+        self.codec_scan_btn.setProperty("variant", "danger")
+        self._repolish(self.codec_scan_btn)
         self.codec_table.setRowCount(0)
         self.codec_row_index.clear()
         self.codec_results = []
@@ -609,23 +617,32 @@ class MainWindow(QMainWindow):
             row, 4, QTableWidgetItem(human_size(info.get("size", 0))))
         self._apply_codec_row_color(row)
 
-    def _on_codec_done(self, results):
+    def _reset_codec_button(self):
         self.codec_scan_btn.setEnabled(True)
         self.codec_scan_btn.setText("掃描編碼")
+        self.codec_scan_btn.setProperty("variant", "")
+        self._repolish(self.codec_scan_btn)
+
+    def _on_codec_done(self, results):
+        self._reset_codec_button()
         self.codec_results = results
         self._apply_codec_filter()
         total = len(results)
         bad = sum(1 for r in results
                   if r["vcodec"] and not self._is_modern_codec(r["vcodec"]))
         unknown = sum(1 for r in results if not r["vcodec"])
+        if self._codec_scan_stopped:
+            self._codec_scan_stopped = False
+            self.codec_summary.setText(f"已停止:目前 {total} 個影片(部分結果)")
+            self.status_label.setText(f"編碼掃描已停止:{total} 個檔案")
+            return
         self.codec_summary.setText(
             f"共 {total} 個影片,其中 {bad} 個非 AV1/HEVC"
             + (f"、{unknown} 個無法辨識" if unknown else ""))
         self.status_label.setText(f"編碼掃描完成:{total} 個檔案")
 
     def _on_codec_failed(self, message: str):
-        self.codec_scan_btn.setEnabled(True)
-        self.codec_scan_btn.setText("掃描編碼")
+        self._reset_codec_button()
         self.status_label.setText(f"編碼掃描失敗:{message}")
 
     # ------------------------------------------------------------- handbrake
@@ -867,13 +884,27 @@ class MainWindow(QMainWindow):
         self.cfg.save()
         self.start_scan()
 
+    @staticmethod
+    def _repolish(widget):
+        """Force a style refresh after changing a dynamic property (variant)."""
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)
+
     def start_scan(self):
+        # While a scan is running the button acts as "停止" -> request a stop.
+        if self.scan_worker is not None and self.scan_worker.isRunning():
+            self._scan_stopped = True
+            self.scan_worker.stop()
+            self.status_label.setText("正在停止掃描 …")
+            return
         root = self.root_edit.text().strip()
         if not root or not os.path.isdir(root):
             self.status_label.setText("請先選擇有效的資料夾")
             return
-        self.scan_btn.setEnabled(False)
-        self.scan_btn.setText("掃描中")
+        self._scan_stopped = False
+        self.scan_btn.setText("停止")
+        self.scan_btn.setProperty("variant", "danger")
+        self._repolish(self.scan_btn)
         self.status_label.setText(f"正在掃描 {short_path(root, 60)} …")
         self.tree.clear()
         self._clear_cards()
@@ -886,14 +917,18 @@ class MainWindow(QMainWindow):
     def _on_scan_progress(self, dirpath: str, count: int):
         self.status_label.setText(f"正在掃描 {short_path(dirpath, 56)}(已 {count} 個影片)")
 
-    def _on_scan_failed(self, message: str):
+    def _reset_scan_button(self):
         self.scan_btn.setEnabled(True)
         self.scan_btn.setText("掃描")
+        self.scan_btn.setProperty("variant", "")
+        self._repolish(self.scan_btn)
+
+    def _on_scan_failed(self, message: str):
+        self._reset_scan_button()
         self.status_label.setText(f"掃描失敗:{message}")
 
     def _on_scan_done(self, files):
-        self.scan_btn.setEnabled(True)
-        self.scan_btn.setText("掃描")
+        self._reset_scan_button()
         self.files = files
         self._apply_filter()
         if self.dup_codec_chk.isChecked():
@@ -903,9 +938,14 @@ class MainWindow(QMainWindow):
             self._select_group(self.visible_groups[0])
         dup_count = sum(1 for g in self.groups if g.is_duplicate)
         seg_count = sum(1 for g in self.groups if g.is_segments)
-        self.status_label.setText(
-            f"完成:{len(self.files)} 個檔案、{len(self.groups)} 部影片、"
-            f"{dup_count} 組重複、{seg_count} 组分段")
+        if self._scan_stopped:
+            self._scan_stopped = False
+            self.status_label.setText(
+                f"已停止:{len(self.files)} 個檔案、{len(self.groups)} 部影片")
+        else:
+            self.status_label.setText(
+                f"完成:{len(self.files)} 個檔案、{len(self.groups)} 部影片、"
+                f"{dup_count} 組重複、{seg_count} 组分段")
 
     # ------------------------------------------------------------- filtering
     def _apply_filter(self):

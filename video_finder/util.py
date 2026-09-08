@@ -49,13 +49,18 @@ def open_folder(path, select_file=False):
     try:
         if os.name == "nt":
             if select_file and os.path.isfile(path):
-                # explorer.exe needs "/select," glued to the quoted path as a
-                # single argument; the space-separated form opens the desktop
-                # instead of the file's folder. The glued form is reliable for
-                # both local drives and mapped network (SMB) drive letters.
-                subprocess.Popen(["explorer", '/select,"%s"' % path])
+                # explorer.exe needs "/select," glued to the quoted path. The
+                # command MUST be passed as a single string: if it is passed as
+                # a list, Python re-escapes the embedded double-quotes (to
+                # backslash-quote) and explorer can no longer find the path, so
+                # it falls back to opening the Desktop instead of the file's
+                # folder. The string form passes the quotes through verbatim and
+                # is reliable for local, mapped-drive and UNC (SMB) paths alike.
+                subprocess.Popen('explorer /select,"%s"' % path)
             else:
                 target = path if os.path.isdir(path) else os.path.dirname(path)
+                if not target:
+                    return False
                 os.startfile(target)  # type: ignore[attr-defined]
         elif sys.platform == "darwin":
             if select_file and os.path.isfile(path):

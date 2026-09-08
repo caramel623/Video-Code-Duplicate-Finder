@@ -28,6 +28,9 @@ QPushButton:disabled { background: #3a4557; color: #8891a0; }
 QPushButton[variant="secondary"] { background: #2c313a; color: #e6e9ee; border: 1px solid #3d4450; }
 QPushButton[variant="secondary"]:hover { background: #343b46; }
 QPushButton[variant="secondary"]:pressed { background: #262b33; }
+QPushButton[variant="danger"] { background: #dc2626; color: #ffffff; }
+QPushButton[variant="danger"]:hover { background: #ef4444; }
+QPushButton[variant="danger"]:pressed { background: #b91c1c; }
 
 QLineEdit {
     background: #23272e; border: 1px solid #3d4450; border-radius: 8px; padding: 7px 10px;
